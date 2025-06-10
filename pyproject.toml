@@ -3,7 +3,7 @@ requires = ["setuptools>=61.2", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "unboundream_dev"
+name = "udt"
 version = "0.1.0"
 description = "Adventure to new framework!"
 readme = "README.md"
@@ -66,17 +66,22 @@ dependencies = [
     "vnpy-ctastrategy",
     "vnpy-ctp",
     "vnpy-ctptest",
+    "vnpy-datamanager",
     "vnpy-mysql",
     "vnpy-paperaccount",
+    "vnpy-portfoliomanager",
     "vnpy-portfoliostrategy",
     "vnpy-postgresql",
     "vnpy-riskmanager",
+    "vnpy-rpcservice",
     "vnpy-scripttrader",
+    "vnpy-simplestrategy",
     "vnpy-sopt",
     "vnpy-sopttest",
     "vnpy-sqlite",
     "vnpy-tts",
     "vnpy-tushare",
+    "vnpy-webtrader",
     "websocket-client==1.8.0",
     "wheel==0.46.1",
     "win32-setctime==1.2.0",
@@ -87,18 +92,23 @@ dependencies = [
 [tool.uv.sources]
 ta-lib = { url = "https://github.com/cgohlke/talib-build/releases/download/v0.6.3/ta_lib-0.6.3-cp312-cp312-win_amd64.whl" }
 vnpy = { path = "C:/vnpy/vnpy" }
-vnpy-ctabacktester = { path = "C:/vnpy/vnpy_ctabacktester" }
-vnpy-ctastrategy = { path = "C:/vnpy/vnpy_ctastrategy" }
-vnpy-ctp = { path = "C:/vnpy/vnpy_ctp" }
-vnpy-ctptest = { path = "C:/vnpy/vnpy_ctptest" }
-vnpy-mysql = { path = "C:/vnpy/vnpy_mysql" }
-vnpy-paperaccount = { path = "C:/vnpy/vnpy_paperaccount" }
-vnpy-portfoliostrategy = { path = "C:/vnpy/vnpy_portfoliostrategy" }
-vnpy-postgresql = { path = "C:/vnpy/vnpy_postgresql" }
-vnpy-riskmanager = { path = "C:/vnpy/vnpy_riskmanager" }
-vnpy-scripttrader = { path = "C:/vnpy/vnpy_scripttrader" }
-vnpy-sopt = { path = "C:/vnpy/vnpy_sopt" }
-vnpy-sopttest = { path = "C:/vnpy/vnpy_sopttest" }
-vnpy-sqlite = { path = "C:/vnpy/vnpy_sqlite" }
-vnpy-tts = { path = "C:/vnpy/vnpy_tts" }
-vnpy-tushare = { path = "C:/vnpy/vnpy_tushare" }
+vnpy-ctabacktester = { path = "../vnpy_ctabacktester" }
+vnpy-ctastrategy = { path = "../vnpy_ctastrategy" }
+vnpy-ctp = { path = "../vnpy_ctp" }
+vnpy-ctptest = { path = "../vnpy_ctptest" }
+vnpy-datamanager = { path = "../vnpy_datamanager" }
+vnpy-mysql = { path = "../vnpy_mysql" }
+vnpy-paperaccount = { path = "../vnpy_paperaccount" }
+vnpy-portfoliomanager = { path = "../vnpy_portfoliomanager" }
+vnpy-portfoliostrategy = { path = "../vnpy_portfoliostrategy" }
+vnpy-postgresql = { path = "../vnpy_postgresql" }
+vnpy-riskmanager = { path = "../vnpy_riskmanager" }
+vnpy-rpcservice = { path = "../vnpy_rpcservice" }
+vnpy-scripttrader = { path = "../vnpy_scripttrader" }
+vnpy-simplestrategy = { path = "../vnpy_simplestrategy" }
+vnpy-sopt = { path = "../vnpy_sopt" }
+vnpy-sopttest = { path = "../vnpy_sopttest" }
+vnpy-sqlite = { path = "../vnpy_sqlite" }
+vnpy-tts = { path = "../vnpy_tts" }
+vnpy-tushare = { path = "../vnpy_tushare" }
+vnpy-webtrader = { path = "../vnpy_webtrader" }
