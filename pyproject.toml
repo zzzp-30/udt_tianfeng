@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61.2", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling>=1.27.0", "babel>=2.17.0"]
+build-backend = "hatchling.build"
 
 [project]
 name = "udt"
@@ -70,7 +70,7 @@ dependencies = [
     "vnpy-mysql",
     "vnpy-paperaccount",
     "vnpy-portfoliomanager",
-    "vnpy-portfoliostrategy",
+    # "vnpy-portfoliostrategy",
     "vnpy-postgresql",
     "vnpy-riskmanager",
     "vnpy-rpcservice",
@@ -90,8 +90,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-ta-lib = { url = "https://github.com/cgohlke/talib-build/releases/download/v0.6.3/ta_lib-0.6.3-cp312-cp312-win_amd64.whl" }
-vnpy = { path = "C:/vnpy/vnpy" }
+vnpy = { path = "../vnpy" }
 vnpy-ctabacktester = { path = "../vnpy_ctabacktester" }
 vnpy-ctastrategy = { path = "../vnpy_ctastrategy" }
 vnpy-ctp = { path = "../vnpy_ctp" }
