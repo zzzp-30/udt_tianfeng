@@ -1,0 +1,12 @@
+# Syncthing
+.stfolder
+
+# Build
+build/
+
+# Python
+__pycache__/
+*.egg-info/
+
+# Secret
+settings.toml

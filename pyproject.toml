@@ -1,0 +1,104 @@
+[build-system]
+requires = ["setuptools>=61.2", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unboundream_dev"
+version = "0.1.0"
+description = "Adventure to new framework!"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "attrs==25.3.0",
+    "beautifulsoup4==4.13.4",
+    "bs4==0.0.2",
+    "certifi==2025.4.26",
+    "charset-normalizer==3.4.2",
+    "colorama==0.4.6",
+    "deap==1.4.3",
+    "fastjsonschema==2.21.1",
+    "filelock==3.18.0",
+    "idna==3.10",
+    "importlib-metadata==8.7.0",
+    "jsonschema==4.24.0",
+    "jsonschema-specifications==2025.4.1",
+    "jupyter-core==5.8.1",
+    "loguru==0.7.3",
+    "lxml==5.4.0",
+    "narwhals==1.41.0",
+    "nbformat==5.10.4",
+    "numpy==2.2.6",
+    "packaging==25.0",
+    "pandas==2.2.3",
+    "peewee==3.18.1",
+    "pip==25.1.1",
+    "platformdirs==4.3.8",
+    "plotly==6.1.2",
+    "pybind11==2.13.6",
+    "pyqtgraph==0.13.7",
+    "pyside6==6.9.0",
+    "pyside6-addons==6.9.0",
+    "pyside6-essentials==6.9.0",
+    "python-dateutil==2.9.0.post0",
+    "pytz==2025.2",
+    "pywin32==310",
+    "pyzmq==26.4.0",
+    "qdarkstyle==3.2.3",
+    "qtpy==2.4.3",
+    "referencing==0.36.2",
+    "requests==2.32.3",
+    "rpds-py==0.25.1",
+    "setuptools==80.9.0",
+    "shiboken6==6.9.0",
+    "simplejson==3.20.1",
+    "six==1.17.0",
+    "soupsieve==2.7",
+    "ta-lib",
+    "tqdm==4.67.1",
+    "traitlets==5.14.3",
+    "tushare==1.4.21",
+    "typing-extensions==4.13.2",
+    "tzdata==2025.2",
+    "tzlocal==5.3.1",
+    "urllib3==2.4.0",
+    "vnpy",
+    "vnpy-ctabacktester",
+    "vnpy-ctastrategy",
+    "vnpy-ctp",
+    "vnpy-ctptest",
+    "vnpy-mysql",
+    "vnpy-paperaccount",
+    "vnpy-portfoliostrategy",
+    "vnpy-postgresql",
+    "vnpy-riskmanager",
+    "vnpy-scripttrader",
+    "vnpy-sopt",
+    "vnpy-sopttest",
+    "vnpy-sqlite",
+    "vnpy-tts",
+    "vnpy-tushare",
+    "websocket-client==1.8.0",
+    "wheel==0.46.1",
+    "win32-setctime==1.2.0",
+    "xtquant==241014.1.2",
+    "zipp==3.22.0",
+]
+
+[tool.uv.sources]
+ta-lib = { url = "https://github.com/cgohlke/talib-build/releases/download/v0.6.3/ta_lib-0.6.3-cp312-cp312-win_amd64.whl" }
+vnpy = { path = "C:/vnpy/vnpy" }
+vnpy-ctabacktester = { path = "C:/vnpy/vnpy_ctabacktester" }
+vnpy-ctastrategy = { path = "C:/vnpy/vnpy_ctastrategy" }
+vnpy-ctp = { path = "C:/vnpy/vnpy_ctp" }
+vnpy-ctptest = { path = "C:/vnpy/vnpy_ctptest" }
+vnpy-mysql = { path = "C:/vnpy/vnpy_mysql" }
+vnpy-paperaccount = { path = "C:/vnpy/vnpy_paperaccount" }
+vnpy-portfoliostrategy = { path = "C:/vnpy/vnpy_portfoliostrategy" }
+vnpy-postgresql = { path = "C:/vnpy/vnpy_postgresql" }
+vnpy-riskmanager = { path = "C:/vnpy/vnpy_riskmanager" }
+vnpy-scripttrader = { path = "C:/vnpy/vnpy_scripttrader" }
+vnpy-sopt = { path = "C:/vnpy/vnpy_sopt" }
+vnpy-sopttest = { path = "C:/vnpy/vnpy_sopttest" }
+vnpy-sqlite = { path = "C:/vnpy/vnpy_sqlite" }
+vnpy-tts = { path = "C:/vnpy/vnpy_tts" }
+vnpy-tushare = { path = "C:/vnpy/vnpy_tushare" }
