@@ -8,7 +8,6 @@ from time import sleep
 
 from vnpy.trader.setting import SETTINGS
 
-
 # --- 设置 Log --- (必须早于 vnpy 其他模块导入，因为其他模块可能依赖 SETTINGS 这个全局变量)
 SETTINGS["log.active"] = True
 SETTINGS["log.level"] = DEBUG
