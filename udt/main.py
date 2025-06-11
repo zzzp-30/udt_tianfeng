@@ -27,10 +27,10 @@ SETTINGS["datafeed.password"] = "c3a110417f08f26d2c221edc0c50d4a8a5001502eea89cf
 
 from vnpy.trader.engine import MainEngine, EventEngine, OmsEngine
 from vnpy.trader.object import *
-# from vnpy_tts import TtsGateway
+from vnpy_tts import TtsGateway
 # from vnpy_ctp import CtpGateway
-from vnpy_ctptest import CtptestGateway
-from vnpy_portfoliostrategy import PortfolioStrategyApp, StrategyEngine
+# from vnpy_ctptest import CtptestGateway
+from vnpy_simplestrategy import StrategyEngine, SimpleStrategyApp
 from vnpy_ctastrategy import CtaEngine, CtaStrategyApp
 
 
@@ -59,16 +59,16 @@ from vnpy_ctastrategy import CtaEngine, CtaStrategyApp
 # }
 
 # TTS 7*24
-# ctp_setting = {
-#     "用户名": "12821",
-#     "密码": "123456",
-#     "经纪商代码": "",
-#     "交易服务器": "121.37.80.177:20002",
-#     "行情服务器": "121.37.80.177:20004",
-#     "产品名称": "",
-#     "授权编码": "",
-#     "产品信息": ""
-# }
+ctp_setting = {
+    "用户名": "12821",
+    "密码": "123456",
+    "经纪商代码": "",
+    "交易服务器": "121.37.80.177:20002",
+    "行情服务器": "121.37.80.177:20004",
+    "产品名称": "",
+    "授权编码": "",
+    "产品信息": ""
+}
 
 # TTS 仿真
 # ctp_setting = {
@@ -83,16 +83,16 @@ from vnpy_ctastrategy import CtaEngine, CtaStrategyApp
 # }
 
 # 紫金天风 仿真
-ctp_setting = {
-    "用户名": "61130",
-    "密码": "tfqh@123",
-    "经纪商代码": "0001",
-    "交易服务器": "114.80.55.98:64205",
-    "行情服务器": "114.80.55.98:64213",
-    "产品名称": "client_unboundream_v2",
-    "授权编码": "3J474CT8DL4EUW6F",
-    "产品信息": "unboundream"
-}
+# ctp_setting = {
+#     "用户名": "61130",
+#     "密码": "tfqh@123",
+#     "经纪商代码": "0001",
+#     "交易服务器": "114.80.55.98:64205",
+#     "行情服务器": "114.80.55.98:64213",
+#     "产品名称": "client_unboundream_v2",
+#     "授权编码": "3J474CT8DL4EUW6F",
+#     "产品信息": "unboundream"
+# }
 
 # 紫金天风 实盘
 # ctp_setting = {
@@ -108,14 +108,14 @@ ctp_setting = {
 
 # 宏源期货 仿真
 # ctp_setting = {
-#     "用户名": "",
-#     "密码": "",
-#     "经纪商代码": "",
-#     "交易服务器": "",
-#     "行情服务器": "",
-#     "产品名称": "client_unboundream_v2",
-#     "授权编码": "",
-#     "产品信息": "unboundream"
+#     "用户名": "333307037",
+#     "密码": "",  # 未提供密码
+#     "经纪商代码": "3070",
+#     "交易服务器": "120.136.162.186:32205",
+#     "行情服务器": "120.136.170.162:32213",
+#     "产品名称": "client_udt_v2",
+#     "授权编码": "WF5WKL7TGPHTIL2U",
+#     "产品信息": "udt"
 # }
 
 
@@ -139,8 +139,8 @@ def check_trading_period() -> bool:
     ):
         trading = True
 
-    # return trading
     return True  # 适配 7*24
+    return trading
 
 
 def run_child() -> None:
@@ -152,35 +152,26 @@ def run_child() -> None:
     
     # 创建主引擎
     main_engine: MainEngine = MainEngine()
+    
     # 获取订单引擎
     oms_engine: OmsEngine = main_engine.get_engine("oms")
-    # 使用 TtsGateway，参考：https://github.com/vnpy/vnpy_tts
-    # main_engine.add_gateway(TtsGateway)
-    # main_engine.add_gateway(CtpGateway)
-    main_engine.add_gateway(CtptestGateway)
-    # 获取 TtsGateway 实例，后面会用于判断 CTP 登录状态
-    # main_gateway: TtsGateway = main_engine.get_gateway("TTS")
-    # main_gateway: CtpGateway = main_engine.get_gateway("CTP")
-    main_gateway: CtptestGateway = main_engine.get_gateway("CTPTEST")
-    # 添加 CtaStrategy App
-    cta_engine: CtaEngine = main_engine.add_app(CtaStrategyApp)
-    # 加载 CTA 策略 class
-    cta_engine.load_strategy_class()  # it does work - 把策略 class 放在 ~/strategies 下即可
-    # 打印加载的 CTA 策略 class
-    cta_engine.write_log(f"已加载策略: {cta_engine.get_all_strategy_class_names()}")
     
-    # --- 创建 CTA 策略 object ---
-    # 测试报单、撤单
-    cta_engine.add_strategy("Ctptest1", "ctptest_1", "ao2507C4000.SHFE", {})
-    # 测试成交
-    cta_engine.add_strategy("Ctptest2", "ctptest_2", "ao2507C4200.SHFE", {})
+    # 使用 TtsGateway
+    main_engine.add_gateway(TtsGateway)
+    main_gateway: TtsGateway = main_engine.get_gateway("TTS")
+    
+    # 使用 CtpGateway
+    # main_engine.add_gateway(CtpGateway)
+    # main_gateway: CtpGateway = main_engine.get_gateway("CTP")
+    
+    # 使用 CtptestGateway
+    # main_engine.add_gateway(CtptestGateway)
+    # main_gateway: CtptestGateway = main_engine.get_gateway("CTPTEST")
     
     # --- 登录 CTP ---
     
     # 尝试登录，如果失败则退出程序
-    # main_engine.connect(ctp_setting, "TTS")
-    # main_engine.connect(ctp_setting, "CTP")
-    main_engine.connect(ctp_setting, "CTPTEST")
+    main_gateway.connect(ctp_setting)
     main_engine.write_log("连接CTP接口")
 
     tries = 0
@@ -203,25 +194,18 @@ def run_child() -> None:
     
     main_engine.write_log("主引擎创建成功")
 
-    # --- 启动 CTA 策略 ---
+    # --- 创建 SimpleStrategy App ---
     
-    # cta_engine.init_engine()
-    # strategy_futures: dict[str, Future] = cta_engine.init_all_strategies()
-    # wait(strategy_futures.values(), return_when=ALL_COMPLETED)
-    # cta_engine.start_all_strategies()
-    
-    main_gateway.cancel_order(req=CancelRequest(
-        symbol="ao2507C4200",
-        exchange=Exchange.SHFE,
-        ordersysid="      140465"
-    ))
-    main_gateway.cancel_order(req=CancelRequest(
-        symbol="ao2507C4200",
-        exchange=Exchange.SHFE,
-        ordersysid="      140466"
-    ))
-    
-    sleep(1)
+    # 添加 App
+    strategy_engine: StrategyEngine = main_engine.add_app(SimpleStrategyApp)
+    # 初始化 Engine
+    strategy_engine.init_engine()
+    # 打印已加载的 strategy classes
+    strategy_engine.write_log(f"已加载策略: {strategy_engine.get_all_strategy_class_names()}")
+    # 调用 StrategyTemplate#on_init (异步执行，但同步等待)
+    wait(strategy_engine.init_all_strategies().values())
+    # 调用 StrategyTemplate#on_start
+    strategy_engine.start_all_strategies()
     
     # --- 账户相关信息 ---
     
@@ -238,20 +222,6 @@ def run_child() -> None:
     [main_engine.write_log(f"vt_accountid={acc.vt_accountid}, balance={acc.balance}, frozen={acc.frozen}, available={acc.available}") for acc in main_engine.get_all_accounts()]
     
     # --- 订阅所有期权合约 ---
-    
-    main_gateway.write_log("开始订阅行情")
-    all_contract_list: list[ContractData] = main_engine.get_all_contracts()
-    counter = 0  # 新增计数器
-    for contract in all_contract_list:
-        if (contract.product == Product.OPTION):
-            counter += 1
-            if counter % 1000 == 0:  # 防止 4096 错误
-                sleep(1)
-            main_gateway.subscribe(req=SubscribeRequest(
-                symbol=contract.symbol,
-                exchange=contract.exchange,
-            ))
-    main_gateway.write_log("行情订阅完毕")
     
     while True:
         sleep(10)

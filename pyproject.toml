@@ -9,6 +9,7 @@ description = "Adventure to new framework!"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "akshare",
     "attrs==25.3.0",
     "beautifulsoup4==4.13.4",
     "bs4==0.0.2",
