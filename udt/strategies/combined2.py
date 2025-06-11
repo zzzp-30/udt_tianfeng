@@ -1,18 +1,18 @@
 import re
 import time
 import asyncio
-import aiohttp
+# import aiohttp
 import pandas as pd
 import akshare as ak  # 从akshare数据库中获取期货历史数据
-from vnpy.trader.object import *
-from vnpy.trader.constant import *
+from vnpy.trader.object import BarData, TickData, OrderData, TradeData, PositionData, ContractData, SubscribeRequest
+from vnpy.trader.constant import Direction, Exchange, Interval, Offset, Status, Product, OptionType, OrderType
 from vnpy_simplestrategy import StrategyTemplate, StrategyEngine
 # from time import time
 from typing import Dict, List, Optional, Union
 from datetime import datetime, timedelta, time as datetime_time
 
 
-class Combined(StrategyTemplate):
+class Combined2(StrategyTemplate):
     """"""
     author = "Minghao Guan & Zhengyi Zhang"
     
@@ -38,15 +38,15 @@ class Combined(StrategyTemplate):
         self.option_vt_symbols: set = set()
         self.future_vt_symbols: set = set()
         self.fund_position: Dict[str, float] = {}
-        self.orderID: Dict[str, list[str]] = {}
+        self.orderID: Dict[str, Optional[str]] = {}
         self.order_info: Optional[pd.DataFrame] = None
         self.current_time: datetime = datetime.now()
         self.trade_time: datetime = datetime.now()
         self.updated_count: int = 0
-        self.total_instruments_num: int = 0
-        self.total_position: list[PositionData] = []
+        self.total_instruments: int = 0
+        self.total_position: list = []
         self.contract_send_count: Dict[str, str] = {}
-        self.trade_time_data: pd.DataFrame = pd.read_excel(r"C:\\Users\\Administrator\\Desktop\\infini_all_x64_pygo\\self_strategy\\params(GXHYTF).xlsx")
+        # self.trade_time_data: pd.DataFrame = pd.read_excel(r'pyStrategy\\self_strategy\\params(GXHYTF).xlsx')
 
     def on_init(self) -> None:
         """策略初始化"""
@@ -82,7 +82,7 @@ class Combined(StrategyTemplate):
                     'vt_symbol': contract_info.vt_symbol,
                     'price_tick': contract_info.pricetick,
                     'expire_date': contract_info.option_expiry,
-                    'strike_price': contract_info.option_strike,
+                    'strike_price': contract_info.option_index,
                     'underlying_symbol': contract_info.option_underlying,
                     'underlying_vt_symbol': contract_info.option_underlying + "." + contract_info.exchange.value,
                     'option_type': contract_info.option_type
@@ -98,8 +98,7 @@ class Combined(StrategyTemplate):
     def process_results(self) -> None:
         """计算剩余交易日，筛选剩余交易日最少的两个的合约"""
         self.results['remained_trading'] = self.results['expire_date'].apply(self.calculate_remaining_trading_days)
-        self.trade_time_data['exchange'] = self.trade_time_data['exchange'].apply(lambda x: Exchange(x))
-        self.results = pd.merge(self.results, self.trade_time_data, on=['product', 'exchange'], how='left')
+        # self.results = pd.merge(self.results, self.trade_time_data, on=['product', 'exchange'], how='left')
         self.results['date_rank'] = self.results.groupby('product')['expire_date'].rank(method='dense')
         self.results = self.results[self.results['date_rank'].isin([1, 2])]
         # self.add_historical_data()
@@ -162,10 +161,11 @@ class Combined(StrategyTemplate):
         option_vt_symbols = self.results['vt_symbol'].unique().tolist()
         future_vt_symbols = self.results['underlying_vt_symbol'].unique().tolist()
 
+        # vt_symbols = option_vt_symbols + future_vt_symbols
         self.vt_symbols = option_vt_symbols + future_vt_symbols
         self.future_vt_symbols = set(future_vt_symbols)
         self.option_vt_symbols = set(option_vt_symbols)
-        self.total_instruments_num = len(option_vt_symbols + future_vt_symbols)
+        self.total_instruments_num = len(self.vt_symbols)
 
     def on_stop(self) -> None:
         """策略停止"""
@@ -174,11 +174,13 @@ class Combined(StrategyTemplate):
     def on_tick(self, tick: TickData) -> None:
         """处理tick数据"""
         super().on_tick(tick)
+        vt_symbol = tick.vt_symbol
+        self.write_log(f"收到行情, {tick.vt_symbol}")
         if not tick.last_price:
             return
-        # self.write_log(f"{tick.symbol} {tick.last_price}")
 
         vt_symbol = tick.vt_symbol
+        self.write_log(f"收到行情, {tick.vt_symbol}")
 
         if vt_symbol in self.option_vt_symbols:
             self.update_option_data(vt_symbol, tick)
@@ -188,10 +190,8 @@ class Combined(StrategyTemplate):
             return
 
         self.updated_count += 1
-        # self.write_log(f"{self.updated_count}/{self.total_instruments_num}")
 
-        if self.updated_count == self.total_instruments_num:
-            self.write_log(f"行情数据更新")
+        if self.updated_count == self.total_instruments:
             self.process_and_clear_data()
 
     def update_option_data(self, vt_symbol: str, tick: TickData) -> None:
@@ -210,7 +210,7 @@ class Combined(StrategyTemplate):
         self.future_update[vt_symbol] = {
             'future_lastPrice': tick.last_price,
             'future_preClosePrice': tick.pre_close,
-            # 'future_pre_settlement_price': tick.pre_settlement_price,
+            'future_pre_settlement_price': tick.pre_settlement_price,
             'future_upperLimit': tick.limit_up,
             'future_lowerLimit': tick.limit_down,
             'future_lowPrice': tick.low_price,
@@ -232,7 +232,7 @@ class Combined(StrategyTemplate):
         close_positions = [
             (close.vt_symbol, close.vt_positionid)
             for close in self.total_position
-            if close.direction == Direction.SHORT
+            if close['direction'] == Direction.SHORT
         ]
         self.fund_position = {product_type: 0.0 for product_type in self.results['product_type'].unique()}
 
@@ -316,7 +316,7 @@ class Combined(StrategyTemplate):
             self.main_engine.write_log(f"设置信号时遇到错误: {e}")
             return pd.DataFrame()
 
-    def calc_signal(self, group: pd.DataFrame) -> tuple[Dict, pd.DataFrame]:
+    def calc_signal(self, group: pd.DataFrame) -> tuple:
         """计算信号并返回处理后的结果字典和目标期权"""
         try:
             if group.empty or not all(col in group.columns for col in ['option_lastPrice', 'future_lastPrice']):
@@ -330,11 +330,11 @@ class Combined(StrategyTemplate):
                 lambda x: x['strike_price'] - (x['future_upperLimit'] if x['option_type'] == OptionType.CALL else x['future_lowerLimit']),
                 axis=1
             )
-            processed_results['target_option_rank'] = processed_results.groupby(['option_type', 'underlying_vt_symbol'], sort=False)['diff1'].rank()
+            processed_results['target_option_rank'] = processed_results.groupby(['option_type', 'underlying_vt_symbol'])['diff1'].rank()
             results_dict = {row['vt_symbol']: row.to_dict() for _, row in processed_results.iterrows()}
 
             target = []
-            for (option_type, _), group in processed_results.groupby(['option_type', 'underlying_vt_symbol'], sort=False):
+            for (option_type, _), group in processed_results.groupby(['option_type', 'underlying_vt_symbol']):
                 if option_type == OptionType.CALL:
                     condition = (group['diff1'] > 0) & (group['option_bidPrice1'] > 3 * group['price_tick'])
                     largest = group[condition].nlargest(1, 'target_option_rank')
@@ -366,8 +366,6 @@ class Combined(StrategyTemplate):
             return
 
         try:
-            self.write_log(results_dict)
-            self.write_log(target_option)
             self.close_positions(results_dict)
             self.closed_positions(results_dict)
             self.offset_close(results_dict)
@@ -377,7 +375,7 @@ class Combined(StrategyTemplate):
         except Exception as e:
             self.main_engine.write_log(f"执行信号时遇到错误: {e}")
 
-    def avoid_self_dealing(self, vt_symbol: str, direction: Direction, price: float) -> bool:
+    def avoid_self_dealing(self, vt_symbol: str, direction: Direction, price: float) -> None:
         """
         避免自成交
         Args:
@@ -414,13 +412,13 @@ class Combined(StrategyTemplate):
         if (datetime.strptime('09:10', '%H:%M').time() <= current_time <= datetime.strptime('11:27', '%H:%M').time() or
             datetime.strptime('13:05', '%H:%M').time() <= current_time <= datetime.strptime('13:55', '%H:%M').time() or
                 datetime.strptime('21:30', '%H:%M').time() <= current_time <= datetime.strptime('22:50', '%H:%M').time()):
-            for product_type, group in target_option.groupby('product_type', sort=False):
+            for product_type, group in target_option.groupby('product_type'):
                 for _, row in group.iterrows():
                     if self.open_condition(row, product_type):
                         try:
                             self.main_engine.write_log(self.traded_volume)
-                            self.open_order(row['vt_symbol'], Direction.SHORT, row['option_askPrice1'], self.volume, str(self.order_count))
-                            self.open_order(row['vt_symbol'], Direction.SHORT, row['option_bidPrice1'], self.volume, str(self.order_count))
+                            self.open_order(row['option_askPrice1'], self.volume, row['vt_symbol'], row['Exchange'], 'sell', str(self.order_count))
+                            self.open_order(row['option_bidPrice1'], self.volume, row['vt_symbol'], row['Exchange'], 'sell', str(self.order_count))
                             self.traded_volume += self.volume * 2
                             self.single_traded_volume[row['vt_symbol']] = self.single_traded_volume.get(row['vt_symbol'], 0) + self.volume * 2
                             self.main_engine.write_log(self.traded_volume)
@@ -516,11 +514,9 @@ class Combined(StrategyTemplate):
         if data['remained_trading'] <= 5:
             return (data['option_askPrice1'] - data['option_bidPrice1'] < 5 * data['price_tick'] and
                     data['close_signal'] and
-                    data['option_volume'] > 15 
-                    # and 
-                    # ((data['option_type'] == OptionType.CALL and data['strike_price'] < ((data['future_upperLimit'] / data['future_pre_settlement_price']) + 0.03) * data['future_lastPrice'])
-                    #  or (data['option_type'] == OptionType.PUT and data['strike_price'] > ((data['future_lowerLimit'] / data['future_pre_settlement_price']) - 0.03) * data['future_lastPrice']))
-                     )
+                    data['option_volume'] > 15 and 
+                    ((data['option_type'] == OptionType.CALL and data['strike_price'] < ((data['future_upperLimit'] / data['future_pre_settlement_price']) + 0.03) * data['future_lastPrice'])
+                     or (data['option_type'] == OptionType.PUT and data['strike_price'] > ((data['future_lowerLimit'] / data['future_pre_settlement_price']) - 0.03) * data['future_lastPrice'])))
         else:
             return (data['option_askPrice1'] - data['option_bidPrice1'] < 5 * data['price_tick'] and
                     data['close_signal'] and
@@ -572,14 +568,14 @@ class Combined(StrategyTemplate):
         self.total_position = self.main_engine.get_all_positions() # 更新账户持仓信息
         self.main_engine.get_all_positions()
         close_positions = [
-            (close.vt_symbol, (close.volume - close.frozen))
+            (close['vt_symbol'], (close['volume'] - close['frozen']))
             for close in self.total_position
-            if (close.volume - close.frozen) > 0 and close.direction == Direction.SHORT
+            if (close['volume'] - close['frozen']) > 0 and close['Direction'] == Direction.SHORT
         ]
         unclosed_positions = [
-            close.vt_symbol
+            close['vt_symbol']
             for close in self.total_position
-            if (close.volume - close.frozen) == 0 and close.direction == Direction.SHORT and close.volume > 0
+            if (close['volume'] - close['frozen']) == 0 and close['Direction'] == Direction.SHORT and close['Position'] > 0
         ]
 
         for close, volume in close_positions:
@@ -601,21 +597,21 @@ class Combined(StrategyTemplate):
                         self.avoid_self_dealing(close, 'sell', bid_price)
                         volume_list = self.split_volume(int(data['max_volume']), combined_volume)
                         for sub in volume_list:
-                            self.close_order(close, Direction.LONG, bid_price, sub, f'风控{self.order_count}')
+                            self.close_order(bid_price, sub, close, data['Exchange'], 'buy', f'风控{self.order_count}')
                             time.sleep(10)  # 防止一秒内连续多次下单
                             
                 elif 19 < data['remained_trading'] <= 130 and data['close_signal']:
                     volume_list = self.split_volume(int(data['max_volume']), volume)
                     for sub in volume_list:
-                        self.close_order(close, Direction.LONG, data['price_tick'] * 3, sub, str(self.order_count))
+                        self.close_order(data['price_tick'] * 3, sub, close, data['Exchange'], 'buy', str(self.order_count))
                 elif 11 < data['remained_trading'] <= 19 and data['close_signal']:
                     volume_list = self.split_volume(int(data['max_volume']), volume)
                     for sub in volume_list:
-                        self.close_order(close, Direction.LONG, data['price_tick'], sub, str(self.order_count))
+                        self.close_order(data['price_tick'], sub, close, data['Exchange'], 'buy', str(self.order_count))
                 elif 6 < data['remained_trading'] <= 11 and data['close_signal']:
                     volume_list = self.split_volume(int(data['max_volume']), volume)
                     for sub in volume_list:
-                        self.close_order(close, Direction.LONG, data['price_tick'], sub, str(self.order_count))
+                        self.close_order(data['price_tick'], sub, close, data['Exchange'], 'buy', str(self.order_count))
             except Exception as e:
                 self.main_engine.write_log(f"平仓时遇到错误 {close}: {e}")
 
@@ -645,9 +641,9 @@ class Combined(StrategyTemplate):
         results['close_signal'] = results['可挂单'].apply(self.at_time)
         results_dict = {row['vt_symbol']: row.to_dict() for _, row in results.iterrows()}
         close_positions = [
-            (close.vt_symbol, (close.volume - close.frozen))
+            (close['vt_symbol'], (close['volume'] - close['frozen']))
             for close in self.main_engine.get_all_positions()
-            if (close.volume - close.frozen) > 0 and close.direction == Direction.SHORT
+            if (close['volume'] - close['frozen']) > 0 and close['Direction'] == Direction.SHORT
         ]
         self.main_engine.write_log(f"close_positions: {close_positions}")
 
@@ -664,17 +660,17 @@ class Combined(StrategyTemplate):
 
                 if 19 < data['remained_trading'] <= 130 and data['close_signal']:
                     for sub in volume_list:
-                        self.close_order(close, Direction.LONG, data['price_tick'] * 2, sub, str(self.order_count))
+                        self.close_order(data['price_tick'] * 2, sub, close, data['Exchange'], 'buy', str(self.order_count))
                 elif 11 < data['remained_trading'] <= 19 and data['close_signal']:
                     for sub in volume_list:
-                        self.close_order(close, Direction.LONG, data['price_tick'], sub, str(self.order_count))
+                        self.close_order(data['price_tick'], sub, close, data['Exchange'], 'buy', str(self.order_count))
                 elif 6 < data['remained_trading'] <= 11 and data['close_signal']:
                     for sub in volume_list:
-                        self.close_order(close, Direction.LONG, data['price_tick'], sub, str(self.order_count))
+                        self.close_order(data['price_tick'], sub, close, data['Exchange'], 'buy', str(self.order_count))
             except Exception as e:
                 self.main_engine.write_log(f"平仓时遇到错误 {close}: {e}")
 
-    def instrument_info(self, vt_symbol: str) -> dict:
+    def instrument_info(self, vt_symbol: str):
         """使用正则表达式匹配标的物（字母）、到期日（数字）、方向（'P'或'C'）、价格（数字）"""
         vt_symbol = vt_symbol.split(".")[0]
         vt_symbol = vt_symbol.replace('-', '')
@@ -699,15 +695,15 @@ class Combined(StrategyTemplate):
 
         if direction == Direction.LONG:
             close_positions = [
-                (close.vt_symbol, close.volume)
+                (close['vt_symbol'], close['Position'])
                 for close in self.total_position
-                if close.volume > 0 and close.direction == direction
+                if close['Position'] > 0 and close['Direction'] == direction
             ]
         else:
             close_positions = [
-                (close.vt_symbol, (close.volume - close.frozen))
+                (close['vt_symbol'], (close['volume'] - close['frozen']))
                 for close in self.total_position
-                if (close.volume - close.frozen) > 0 and close.direction == direction
+                if (close['volume'] - close['frozen']) > 0 and close['Direction'] == direction
             ]
         volumes = 0
         

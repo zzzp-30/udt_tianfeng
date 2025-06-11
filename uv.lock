@@ -1894,14 +1894,13 @@ requires-dist = [{ name = "importlib-metadata" }]
 
 [[package]]
 name = "vnpy-tushare"
-version = "1.4.7.0"
 source = { directory = "../vnpy_tushare" }
 dependencies = [
     { name = "tushare" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "tushare" }]
+requires-dist = [{ name = "tushare", specifier = ">=1.4.21" }]
 
 [[package]]
 name = "vnpy-webtrader"

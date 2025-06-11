@@ -1,12 +1,19 @@
 # Syncthing
 .stfolder
 
-# Build
-build/
-
-# Python
+# Python-generated files
 __pycache__/
-*.egg-info/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
 
-# Secret
-settings.toml
+# Virtual environments
+.venv
+
+# vnpy 的数据和配置
+udt/data
+
+# Log
+*.log
