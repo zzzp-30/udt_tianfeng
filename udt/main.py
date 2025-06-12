@@ -9,8 +9,8 @@ from time import sleep
 from vnpy.trader.setting import SETTINGS
 from vnpy.trader.engine import MainEngine, EventEngine, OmsEngine
 from vnpy.trader.object import *
-from vnpy_tts import TtsGateway
-# from vnpy_ctp import CtpGateway
+# from vnpy_tts import TtsGateway
+from vnpy_ctp import CtpGateway
 # from vnpy_ctptest import CtptestGateway
 from vnpy_simplestrategy import StrategyEngine, SimpleStrategyApp
 from vnpy_ctastrategy import CtaEngine, CtaStrategyApp
@@ -41,16 +41,16 @@ from vnpy_ctastrategy import CtaEngine, CtaStrategyApp
 # }
 
 # TTS 7*24
-ctp_setting = {
-    "用户名": "12821",
-    "密码": "123456",
-    "经纪商代码": "",
-    "交易服务器": "121.37.80.177:20002",
-    "行情服务器": "121.37.80.177:20004",
-    "产品名称": "",
-    "授权编码": "",
-    "产品信息": ""
-}
+# ctp_setting = {
+#     "用户名": "12821",
+#     "密码": "123456",
+#     "经纪商代码": "",
+#     "交易服务器": "121.37.80.177:20002",
+#     "行情服务器": "121.37.80.177:20004",
+#     "产品名称": "",
+#     "授权编码": "",
+#     "产品信息": ""
+# }
 
 # TTS 仿真
 # ctp_setting = {
@@ -77,16 +77,16 @@ ctp_setting = {
 # }
 
 # 紫金天风 实盘
-# ctp_setting = {
-#     "用户名": "61130",
-#     "密码": "tfqh@123",
-#     "经纪商代码": "0001",
-#     "交易服务器": "101.230.80.85:41206",
-#     "行情服务器": "101.230.80.85:41214",
-#     "产品名称": "client_unboundream_v2",
-#     "授权编码": "3J474CT8DL4EUW6F",
-#     "产品信息": "unboundream"
-# }
+ctp_setting = {
+    "用户名": "89110038",
+    "密码": "wjzb7777",
+    "经纪商代码": "0001",
+    "交易服务器": "101.230.80.85:41206",
+    "行情服务器": "101.230.80.85:41214",
+    "产品名称": "client_unboundream_v2",
+    "授权编码": "3J474CT8DL4EUW6F",
+    "产品信息": "unboundream"
+}
 
 # 宏源期货 仿真
 # ctp_setting = {
@@ -139,12 +139,12 @@ def run_child() -> None:
     oms_engine: OmsEngine = main_engine.get_engine("oms")
     
     # 使用 TtsGateway
-    main_engine.add_gateway(TtsGateway)
-    main_gateway: TtsGateway = main_engine.get_gateway("TTS")
+    # main_engine.add_gateway(TtsGateway)
+    # main_gateway: TtsGateway = main_engine.get_gateway("TTS")
     
     # 使用 CtpGateway
-    # main_engine.add_gateway(CtpGateway)
-    # main_gateway: CtpGateway = main_engine.get_gateway("CTP")
+    main_engine.add_gateway(CtpGateway)
+    main_gateway: CtpGateway = main_engine.get_gateway("CTP")
     
     # 使用 CtptestGateway
     # main_engine.add_gateway(CtptestGateway)
