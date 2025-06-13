@@ -1,17 +1,21 @@
+import asyncio
 import re
 import time
-import asyncio
-import aiohttp
-import pandas as pd
-import akshare as ak  # 从akshare数据库中获取期货历史数据
-from vnpy.trader.object import *
-from vnpy.trader.constant import *
-from vnpy.trader.utility import get_file_path
-from vnpy_simplestrategy import StrategyTemplate, StrategyEngine
-# from time import time
-from typing import Dict, List, Optional, Union
-from datetime import datetime, timedelta, time as datetime_time
 import traceback
+from datetime import datetime
+from datetime import time as datetime_time
+from datetime import timedelta
+from typing import Dict, List, Optional, Union
+
+import aiohttp
+import akshare as ak  # 从akshare数据库中获取期货历史数据
+import pandas as pd
+from pandas import DataFrame
+
+from vnpy.trader.constant import *
+from vnpy.trader.object import *
+from vnpy.trader.utility import get_file_path
+from vnpy_simplestrategy import StrategyEngine, StrategyTemplate
 
 
 class Combined(StrategyTemplate):
@@ -42,7 +46,23 @@ class Combined(StrategyTemplate):
         self.future_vt_symbols: set = set()
         self.fund_position: Dict[str, float] = {}
         self.orderID: Dict[str, list[str]] = {}
-        self.order_info: Optional[pd.DataFrame] = None
+        self.order_info_columns: dict[str, type] = {
+            "symbol": str,
+            "vt_symbol": str,
+            "datetime": "datetime64[ms]",
+            "canceltime": "datetime64[ms]",
+            "exchange": Exchange,
+            "ordersysid": str,
+            "status": Status,
+            "direction": Direction,
+            "offset": Offset,
+            "price": float,
+            "type": OrderType,
+            "volume": int,
+            "traded": int,
+            "memo": str
+        }
+        self.order_info: pd.DataFrame = pd.DataFrame({col: pd.Series(dtype=dtype) for col, dtype in self.order_info_columns.items()})
         self.current_time: datetime = datetime.now()
         self.trade_time: datetime = datetime.now()
         self.updated_count: int = 0
@@ -71,8 +91,6 @@ class Combined(StrategyTemplate):
     def initialize_results(self, exchange_list: List[Exchange]) -> None:
         """ 初始化 results DataFrame"""
         self.results = pd.DataFrame(columns=['product', 'exchange', 'symbol', 'vt_symbol', 'price_tick', 'expire_date', 'strike_price', 'underlying_symbol', 'underlying_vt_symbol', 'option_type'])
-        self.order_info = pd.DataFrame(columns=['symbol', 'vt_symbol', 'datetime', 'canceltime', 'exchange', 'ordersysid', 'status', 'direction', 'offset',
-                                                'price', 'type', 'volume', 'traded', 'memo'])
         all_contracts = self.main_engine.get_all_contracts()
         for contract_info in all_contracts:
             # if contract_info.product == Product.OPTION and contract_info.option_portfolio in product_list:
@@ -859,8 +877,9 @@ class Combined(StrategyTemplate):
             else:
                 self.order_info = pd.concat([self.order_info, order_df], ignore_index=True)
 
+            # Note: datetime 这一列必须都处于同一时区，注意数据来源的样子
             self.order_info['datetime'] = pd.to_datetime(self.order_info['datetime']).apply(
-                lambda x: datetime.combine(datetime.now().date(), x.time())
+                lambda x: x.replace(year=datetime.now().year, month=datetime.now().month, day=datetime.now().day)
             )
             self.order_info['cancel_time1'] = self.order_info.apply(
                 lambda row: row['datetime'] + timedelta(seconds=120)
