@@ -1751,8 +1751,13 @@ requires-dist = [{ name = "importlib-metadata" }]
 
 [[package]]
 name = "vnpy-datamanager"
-version = "1.1.1"
 source = { directory = "../vnpy_datamanager" }
+dependencies = [
+    { name = "vnpy" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "vnpy", specifier = ">=4.0.0" }]
 
 [[package]]
 name = "vnpy-mysql"
@@ -1772,25 +1777,23 @@ requires-dist = [
 
 [[package]]
 name = "vnpy-paperaccount"
-version = "1.0.6"
 source = { directory = "../vnpy_paperaccount" }
 dependencies = [
-    { name = "importlib-metadata" },
+    { name = "vnpy" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "importlib-metadata" }]
+requires-dist = [{ name = "vnpy", specifier = ">=4.0.0" }]
 
 [[package]]
 name = "vnpy-portfoliomanager"
-version = "1.0.4"
 source = { directory = "../vnpy_portfoliomanager" }
 dependencies = [
-    { name = "importlib-metadata" },
+    { name = "vnpy" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "importlib-metadata" }]
+requires-dist = [{ name = "vnpy", specifier = ">=4.0.0" }]
 
 [[package]]
 name = "vnpy-postgresql"
@@ -1804,19 +1807,23 @@ requires-dist = [{ name = "peewee", specifier = ">=3.17.9" }]
 
 [[package]]
 name = "vnpy-riskmanager"
-version = "1.0.4"
 source = { directory = "../vnpy_riskmanager" }
-
-[[package]]
-name = "vnpy-rpcservice"
-version = "1.0.6"
-source = { directory = "../vnpy_rpcservice" }
 dependencies = [
-    { name = "importlib-metadata" },
+    { name = "vnpy" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "importlib-metadata" }]
+requires-dist = [{ name = "vnpy", specifier = ">=4.0.0" }]
+
+[[package]]
+name = "vnpy-rpcservice"
+source = { directory = "../vnpy_rpcservice" }
+dependencies = [
+    { name = "vnpy" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "vnpy", specifier = ">=4.0.0" }]
 
 [[package]]
 name = "vnpy-scripttrader"
@@ -1904,7 +1911,6 @@ requires-dist = [{ name = "tushare", specifier = ">=1.4.21" }]
 
 [[package]]
 name = "vnpy-webtrader"
-version = "1.0.5"
 source = { directory = "../vnpy_webtrader" }
 dependencies = [
     { name = "fastapi" },
@@ -1913,18 +1919,20 @@ dependencies = [
     { name = "python-jose" },
     { name = "python-multipart" },
     { name = "uvicorn" },
+    { name = "vnpy" },
     { name = "websockets" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi" },
-    { name = "passlib" },
-    { name = "pydantic" },
-    { name = "python-jose" },
-    { name = "python-multipart" },
-    { name = "uvicorn" },
-    { name = "websockets" },
+    { name = "fastapi", specifier = ">=0.115.12" },
+    { name = "passlib", specifier = ">=1.7.4" },
+    { name = "pydantic", specifier = ">=1.0.1" },
+    { name = "python-jose", specifier = ">=3.4.0" },
+    { name = "python-multipart", specifier = ">=0.0.20" },
+    { name = "uvicorn", specifier = ">=0.34.2" },
+    { name = "vnpy", specifier = ">=4.0.0" },
+    { name = "websockets", specifier = ">=15.0.1" },
 ]
 
 [[package]]
