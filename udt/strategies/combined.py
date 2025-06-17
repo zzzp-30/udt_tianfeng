@@ -12,9 +12,11 @@ import akshare as ak  # 从akshare数据库中获取期货历史数据
 import pandas as pd
 from pandas import DataFrame
 
-from vnpy.trader.constant import *
-from vnpy.trader.object import *
+from vnpy.trader.constant import (Direction, Exchange, Offset, OptionType,
+                                  OrderType, Product, Status)
+from vnpy.trader.object import CancelRequest, OrderData, PositionData, TickData, TradeData
 from vnpy.trader.utility import get_file_path
+from vnpy.utility.cooldown import Cooldown
 from vnpy_simplestrategy import StrategyEngine, StrategyTemplate
 
 
@@ -39,41 +41,68 @@ class Combined(StrategyTemplate):
         self.single_traded_volume: Dict[str, float] = {}
         self.order_count: int = 0
         self.investor: str = ''
-        self.results: Optional[pd.DataFrame] = None
-        self.option_update: Dict[str, Dict[str, Union[float, datetime]]] = {}
-        self.future_update: Dict[str, Dict[str, float]] = {}
+        self.results: Optional[DataFrame] = None
+        self.option_update: Dict[str, Dict[str, Union[float, datetime]]] = {}  # vt_symbol: 关注的期权 tick 数据
+        self.future_update: Dict[str, Dict[str, float]] = {}  # vt_symbol: 关注的期货 tick 数据
         self.option_vt_symbols: set = set()
         self.future_vt_symbols: set = set()
-        self.fund_position: Dict[str, float] = {}
-        self.orderID: Dict[str, list[str]] = {}
-        self.order_info_columns: dict[str, type] = {
-            "symbol": str,
-            "vt_symbol": str,
-            "datetime": "datetime64[ms]",
-            "canceltime": "datetime64[ms]",
-            "exchange": Exchange,
-            "ordersysid": str,
-            "status": Status,
-            "direction": Direction,
-            "offset": Offset,
-            "price": float,
-            "type": OrderType,
-            "volume": int,
-            "traded": int,
-            "memo": str
+        self.fund_position: Dict[str, float] = {}  # 品种: 资金占用比例
+        self.order_info_cols: dict[str, str] = {
+            "symbol": 'string',
+            "vt_symbol": 'string',
+            "datetime": 'datetime64[ns, Asia/Shanghai]',
+            "canceltime": 'datetime64[ns, Asia/Shanghai]',
+            "cancel_time1": 'datetime64[ns, Asia/Shanghai]',
+            "exchange": 'object',  # enum: Exchange
+            "orderid": 'string',
+            "ordersysid": 'string',
+            "status": 'object',  # enum: Status
+            "direction": 'object',  # enum: Direction
+            "offset": 'object',  # enum: Offset
+            "price": 'float64',
+            "type": 'object',  # enum: OrderType
+            "volume": 'int32',
+            "traded": 'int32',
+            "memo": 'string'
         }
-        self.order_info: pd.DataFrame = pd.DataFrame({col: pd.Series(dtype=dtype) for col, dtype in self.order_info_columns.items()})
+        self.order_info: DataFrame = DataFrame(columns=list(self.order_info_cols.keys())).astype(self.order_info_cols)
         self.current_time: datetime = datetime.now()
         self.trade_time: datetime = datetime.now()
         self.updated_count: int = 0
         self.total_instruments_num: int = 0
         self.total_position: list[PositionData] = []
         self.contract_send_count: Dict[str, str] = {}
-        self.trade_time_data: pd.DataFrame = pd.read_excel(get_file_path("params(GXHYTF).xlsx"))
+        self.trade_time_data: DataFrame = pd.read_excel(get_file_path("params(GXHYTF).xlsx"))
+        
+        # 开仓操作的冷却
+        self.open_position_cooldown: Cooldown = Cooldown(timeout_seconds=5.0)
+        # 平仓操作的冷却
+        self.close_positon_cooldown: Cooldown = Cooldown(timeout_seconds=5.0)
 
     def on_init(self) -> None:
         """策略初始化"""
         # self.investor = self.get_investor_data().investor_id
+        all_order_data: list[OrderData] = self.main_engine.get_all_orders()
+        order_records = []
+        for order in all_order_data:
+            order_records.append({
+                'symbol': order.symbol,
+                'vt_symbol': order.vt_symbol,
+                'datetime': order.datetime,
+                'canceltime': getattr(order, 'canceltime', pd.NaT),
+                'exchange': order.exchange,
+                'ordersysid': getattr(order, 'ordersysid', ''),
+                'status': order.status,
+                'direction': order.direction,
+                'offset': order.offset,
+                'price': order.price,
+                'type': order.type,
+                'volume': order.volume,
+                'traded': order.traded,
+                'memo': getattr(order, 'memo', '')
+            })
+        self.order_info = DataFrame(order_records)
+        
         self.total_position = self.main_engine.get_all_positions()
         exchange_list = [Exchange.CZCE, ] # Exchange.CFFEX, Exchange.DCE, Exchange.SHFE, Exchange.INE
         self.initialize_results(exchange_list)
@@ -90,14 +119,14 @@ class Combined(StrategyTemplate):
     # def initialize_results(self, product_list: List[str]) -> None:
     def initialize_results(self, exchange_list: List[Exchange]) -> None:
         """ 初始化 results DataFrame"""
-        self.results = pd.DataFrame(columns=['product', 'exchange', 'symbol', 'vt_symbol', 'price_tick', 'expire_date', 'strike_price', 'underlying_symbol', 'underlying_vt_symbol', 'option_type'])
+        self.results = DataFrame(columns=['product', 'exchange', 'symbol', 'vt_symbol', 'price_tick', 'expire_date', 'strike_price', 'underlying_symbol', 'underlying_vt_symbol', 'option_type'])
         all_contracts = self.main_engine.get_all_contracts()
         for contract_info in all_contracts:
             # if contract_info.product == Product.OPTION and contract_info.option_portfolio in product_list:
             if contract_info.product == Product.OPTION and contract_info.exchange in exchange_list:
                 contracts_data = []
                 contracts_data.append({
-                    'product': contract_info.option_portfolio, # 品种，注意与contract_info.product区别，后者是金融产品种类
+                    'product': contract_info.option_portfolio, # 品种，注意与 contract_info.product 区别，后者是金融产品种类
                     'exchange': contract_info.exchange,
                     'symbol': contract_info.symbol,
                     'vt_symbol': contract_info.vt_symbol,
@@ -108,7 +137,7 @@ class Combined(StrategyTemplate):
                     'underlying_vt_symbol': contract_info.option_underlying + "." + contract_info.exchange.value,
                     'option_type': contract_info.option_type
                 })
-                self.results = pd.concat([self.results, pd.DataFrame(contracts_data)], ignore_index=True)
+                self.results = pd.concat([self.results, DataFrame(contracts_data)], ignore_index=True)
         self.process_results()
 
     def calculate_remaining_trading_days(self, end_date: datetime) -> int:
@@ -162,8 +191,8 @@ class Combined(StrategyTemplate):
                 df = pd.read_csv('C:/python/exchange_data/czce.csv')
                 df['tradedate'] = pd.to_datetime(df['tradedate'])
                 df['symbol'] = df['symbol'].str.replace(r'([a-zA-Z])\d', r'\1', regex=True) # 针对郑商所代码进行修改
-                by_data: pd.DataFrame = df[df['tradedate'] == by_day]
-                y_data: pd.DataFrame = df[df['tradedate'] == y_day]
+                by_data: DataFrame = df[df['tradedate'] == by_day]
+                y_data: DataFrame = df[df['tradedate'] == y_day]
                 
                 if by_data.empty or y_data.empty:
                     self.write_log("无法从本地数据库获取数据")
@@ -262,7 +291,7 @@ class Combined(StrategyTemplate):
         for vt_symbol, vt_positionid in close_positions:
             if vt_symbol in self.option_vt_symbols:
                 symbol_info = self.main_engine.get_contract(vt_symbol)
-                product = symbol_info.option_portfolio
+                product = symbol_info.option_portfolio  # 品种, 例如 lc2508-C-94000 就是 lc_o
                 option_type = symbol_info.option_type.value
                 product_type = product + option_type
                 percent = self.cal_fund_tie(vt_positionid)
@@ -289,7 +318,7 @@ class Combined(StrategyTemplate):
             # self.state_map.trade_tick = datetime.now()
             # self.update_status_bar()
         except Exception as e:
-            self.write_log(f"处理并清理数据时遇到错误")
+            self.write_log(f"处理并清理数据时遇到错误 {traceback.format_exc()}")
 
     def process_results_by_product(self) -> None:
         """按产品分组处理数据"""
@@ -298,9 +327,9 @@ class Combined(StrategyTemplate):
             for _, group in grouped:
                 self.process_group(group)
         except Exception as e:
-            self.write_log(f"按产品分组处理数据时遇到错误")
+            self.write_log(f"按产品分组处理数据时遇到错误 {traceback.format_exc()}")
 
-    def process_group(self, group: pd.DataFrame) -> None:
+    def process_group(self, group: DataFrame) -> None:
         """处理数据组"""
         results_dict, target_option = self.calc_signal(group)
         self.exec_signal(results_dict, target_option)
@@ -319,10 +348,10 @@ class Combined(StrategyTemplate):
             else:
                 return start_time <= current_time <= end_time
         except Exception as e:
-            self.write_log(f"时间判断错误 for time_period: {time_period}")
+            self.write_log(f"时间判断错误 for time_period: {time_period} {traceback.format_exc()}")
             return False
 
-    def set_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+    def set_signals(self, data: DataFrame) -> DataFrame:
         """设置交易信号"""
         try:
             time_periods_close = ['可挂单', '交易时间段1', '交易时间段2', '交易时间段3', '交易时间段4']
@@ -333,18 +362,18 @@ class Combined(StrategyTemplate):
 
             return data
         except Exception as e:
-            self.write_log(f"设置信号时遇到错误")
-            return pd.DataFrame()
+            self.write_log(f"设置信号时遇到错误 {traceback.format_exc()}")
+            return DataFrame()
 
-    def calc_signal(self, group: pd.DataFrame) -> tuple[Dict, pd.DataFrame]:
+    def calc_signal(self, group: DataFrame) -> tuple[Dict, DataFrame]:
         """计算信号并返回处理后的结果字典和目标期权"""
         try:
             if group.empty or not all(col in group.columns for col in ['option_lastPrice', 'future_lastPrice']):
-                return {}, pd.DataFrame()
+                return {}, DataFrame()
 
             processed_results = self.set_signals(group.dropna(subset=['option_lastPrice', 'future_lastPrice']))
             if processed_results.empty:
-                return {}, pd.DataFrame()
+                return {}, DataFrame()
 
             processed_results['diff1'] = processed_results.apply(
                 lambda x: x['strike_price'] - (x['future_upperLimit'] if x['option_type'] == OptionType.CALL else x['future_lowerLimit']),
@@ -356,10 +385,12 @@ class Combined(StrategyTemplate):
             target = []
             for (option_type, _), group in processed_results.groupby(['option_type', 'underlying_vt_symbol'], sort=False):
                 if option_type == OptionType.CALL:
+                    # 将涨停板外满足卖一价大于3个最小变动价的第一个最靠近实值的期权作为目标
                     condition = (group['diff1'] > 0) & (group['option_bidPrice1'] > 3 * group['price_tick'])
                     largest = group[condition].nlargest(1, 'target_option_rank')
                     target.append(largest)
                 elif option_type == OptionType.PUT:
+                    # 将跌停板外满足买一价大于3个最小变动价的第一个最靠近实值的期权作为目标
                     condition = (group['diff1'] < 0) & (group['option_bidPrice1'] > 3 * group['price_tick'])
                     smallest = group[condition].nsmallest(1, 'target_option_rank')
                     target.append(smallest)
@@ -371,14 +402,14 @@ class Combined(StrategyTemplate):
                     (target_option['remained_trading'] <= 45)
                 ].reset_index(drop=True)
             else:
-                target_option = pd.DataFrame()
+                target_option = DataFrame()
 
             return results_dict, target_option
         except Exception as e:
-            self.write_log(f"计算信号时遇到错误")
-            return {}, pd.DataFrame()
+            self.write_log(f"计算信号时遇到错误 {traceback.format_exc()}")
+            return {}, DataFrame()
 
-    def exec_signal(self, results_dict: Dict[str, Dict], target_option: pd.DataFrame) -> None:
+    def exec_signal(self, results_dict: Dict[str, Dict], target_option: DataFrame) -> None:
         """执行信号"""
         # if (not self.trading or
         #     (self.current_time - self.trade_time).total_seconds() < 2 or
@@ -391,6 +422,7 @@ class Combined(StrategyTemplate):
             self.offset_close(results_dict)
             self.AV_close(results_dict)
             self.open_positions(target_option)  # 邹老师: 法定节假日前关闭开仓
+            self.cancel_wrong_order(results_dict)
             # self.cancel_orders()
         except Exception as e:
             self.write_log(f"执行信号时遇到错误 {traceback.format_exc()}")
@@ -427,7 +459,7 @@ class Combined(StrategyTemplate):
             return False  # 出现异常时默认禁止下单
 
         return not conflict_found  # 返回是否可以安全下单
-    def open_positions(self, target_option: pd.DataFrame) -> None:
+    def open_positions(self, target_option: DataFrame) -> None:
         """开仓操作"""
         current_time = self.current_time.time()
         if (datetime.strptime('09:10', '%H:%M').time() <= current_time <= datetime.strptime('11:27', '%H:%M').time() or
@@ -442,7 +474,7 @@ class Combined(StrategyTemplate):
                             self.write_log(f"开仓: {row['vt_symbol']}")
                             self.traded_volume += self.volume * 2
                             self.single_traded_volume[row['vt_symbol']] = self.single_traded_volume.get(row['vt_symbol'], 0) + self.volume * 2
-                            time.sleep(5)  # 防止一秒内连续多次下单
+                            # time.sleep(5)  # 防止一秒内连续多次下单
                         except Exception:
                             self.write_log(f"开仓时遇到错误 {row['vt_symbol']} {traceback.format_exc()}")
 
@@ -461,7 +493,9 @@ class Combined(StrategyTemplate):
                 and self.fund_position[product_type] < 0.1 
                 and self.traded_volume < self.max_volume
                 and self.single_traded_volume.get(row['vt_symbol'], 0) < self.single_max
-                and row["open_signal"])
+                and row["open_signal"]
+                and self.open_position_cooldown.test()  # TODO 冷却
+                )
 
     # TODO:
     def open_order(self, vt_symbol: str, direction: Direction, price: float, volume: int, memo: str) -> None:
@@ -472,7 +506,7 @@ class Combined(StrategyTemplate):
                 self.write_log(f"自成交风险未解除，跳过开仓: {vt_symbol}")
                 return
             
-            self.orderID[memo] = self.send_order(
+            self.send_order(
                 vt_symbol=vt_symbol,
                 direction=direction,
                 offset=Offset.OPEN,
@@ -493,7 +527,7 @@ class Combined(StrategyTemplate):
                 self.write_log(f"自成交风险未解除，跳过开仓: {vt_symbol}")
                 return
             
-            self.orderID[memo] = self.send_order(
+            self.send_order(
                 vt_symbol=vt_symbol,
                 direction=direction,
                 offset=Offset.CLOSE,
@@ -503,7 +537,7 @@ class Combined(StrategyTemplate):
             )
             self.order_count += 1
         except Exception as e:
-            self.write_log(f"平仓操作时遇到错误 {vt_symbol}")
+            self.write_log(f"平仓操作时遇到错误 {vt_symbol} {traceback.format_exc()}")
 
 
     @staticmethod
@@ -518,7 +552,6 @@ class Combined(StrategyTemplate):
         open_price = data['future_openPrice']
         pre_close = data['future_preClosePrice']
         pre_settlement = data['future_pre_settlement_price']
-
 
         if option_type == OptionType.CALL:
             return (last_price > 1.015 * pre_close or
@@ -543,11 +576,11 @@ class Combined(StrategyTemplate):
                     data['option_volume'] > 15)
 
     def closed_positions(self, results_dict: Dict[str, Dict]) -> None:
-        """"再风控策略"""
+        """再风控策略"""
         closed_order = self.order_info[
             (self.order_info['offset'].isin([Offset.CLOSE, Offset.CLOSETODAY, Offset.CLOSEYESTERDAY])) &
             (self.order_info['status'].isin([Status.NOTTRADED])) &
-            (~self.order_info['memo'].str.contains('风控'))
+            (~self.order_info['memo'].str.contains('RiskCtrl'))
         ]
 
         for _, row in closed_order.drop_duplicates().iterrows():
@@ -566,14 +599,45 @@ class Combined(StrategyTemplate):
                     self.check_future_condition(data, option_type) and
                     self.check_option_condition(data)):
 
-                    delta_volume = self.combined_volumes(data['vt_symbol'], Direction.SHORT) - self.combined_volumes(data['vt_symbol'], Direction.LONG)
-                    if delta_volume > 0:
-                        req = CancelRequest(ordersysid=ordersysid, vt_symbol=vt_symbol, exchange=exchange)
-                        self.cancel_order_by_sysid(req)
-                        self.write_log(f"撤单: {vt_symbol}")
-                        self.order_info.loc[self.order_info['ordersysid'] == ordersysid, 'status'] = Status.CANCELLED
+                    # delta_volume = self.combined_volumes(data['vt_symbol'], Direction.SHORT) - self.combined_volumes(data['vt_symbol'], Direction.LONG)
+                    # if delta_volume > 0:
+                    self.cancel_order_by_sysid(ordersysid)
+                    self.write_log(f"撤单: {vt_symbol}")
+                    self.order_info.loc[self.order_info['ordersysid'] == ordersysid, 'status'] = Status.CANCELLED
             except Exception as e:
                 self.write_log(f"再风控时遇到错误 {vt_symbol}")
+
+    def cancel_wrong_order(self, results_dict: Dict[str, Dict]) -> None:
+        """开仓前风控"""
+        open_order = self.order_info[
+            (self.order_info['offset'] == Offset.OPEN) &
+            (self.order_info['status'] == Status.NOTTRADED) &
+            (self.order_info['direction'] == Direction.SHORT)
+        ]
+
+        for _, row in open_order.drop_duplicates().iterrows():
+            vt_symbol = row['vt_symbol']
+            ordersysid = row['ordersysid'] if not pd.isna(row['ordersysid']) else None
+            exchange = row['exchange']
+
+            if vt_symbol not in results_dict:
+                continue
+
+            try:
+                data = results_dict[vt_symbol]
+                option_type = data['option_type']
+
+                if (self.is_trading_time() and
+                    self.check_future_condition(data, option_type) and
+                    self.check_option_condition(data)):
+
+                    # delta_volume = self.combined_volumes(data['vt_symbol'], Direction.SHORT) - self.combined_volumes(data['vt_symbol'], Direction.LONG)
+                    # if delta_volume > 0:
+                    self.cancel_order_by_sysid(ordersysid)
+                    self.write_log(f"撤单: {vt_symbol}")
+                    self.order_info.loc[self.order_info['ordersysid'] == ordersysid, 'status'] = Status.CANCELLED
+            except Exception as e:
+                self.write_log(f"开仓前风控时遇到错误 {vt_symbol}")
 
     @staticmethod
     def split_volume(max_volume: int, total_volume: int) -> list[int]:
@@ -599,6 +663,8 @@ class Combined(StrategyTemplate):
         ]
         self.write_log(f"close_positions: {close_positions}")
 
+        # close: vt_symbol
+        # volume: 可平量
         for close, volume in close_positions:
             if close not in results_dict:
                 continue
@@ -607,21 +673,25 @@ class Combined(StrategyTemplate):
                 data = results_dict[close]
                 option_type = data['option_type']
                 
+                # 达到风控条件，挂风控平仓单
                 if (self.is_trading_time() and
                     self.check_future_condition(data, option_type) and
-                    self.check_option_condition(data)):
-                    self.total_position = self.main_engine.get_all_positions() # 更新账户持仓信息
-                    combined_volume = round((1 - self.combined_volumes(data['vt_symbol'], Direction.LONG)/self.combined_volumes(data['vt_symbol'], Direction.SHORT)) * volume)
-                    if combined_volume > 0:
-                        # 获取有效买一价，如果不存在或为0则使用最小价格单位，并确保不低于最小价格单位
-                        bid_price = max(data.get('option_bidPrice1', data['price_tick']), data['price_tick'])
-                        self.avoid_self_dealing(close, 'sell', bid_price)
-                        volume_list = self.split_volume(int(data['max_volume']), combined_volume)
-                        for sub in volume_list:
-                            self.close_order(close, Direction.LONG, bid_price, sub, f'风控{self.order_count}')
-                            self.write_log(f"平仓 {close} {Direction.LONG} {bid_price} {sub} @{self.order_count}")
-                            time.sleep(10)  # 防止一秒内连续多次下单
-                            
+                    self.check_option_condition(data)
+                    ):
+                    if self.close_positon_cooldown.test():  # TODO 冷却
+                        self.total_position = self.main_engine.get_all_positions() # 更新账户持仓信息
+                        combined_volume = round((1 - self.combined_volumes(data['vt_symbol'], Direction.LONG)/self.combined_volumes(data['vt_symbol'], Direction.SHORT)) * volume)
+                        if combined_volume > 0:
+                            # 获取有效买一价，如果不存在或为0则使用最小价格单位，并确保不低于最小价格单位
+                            bid_price = max(data.get('option_bidPrice1', data['price_tick']), data['price_tick'])
+                            self.avoid_self_dealing(close, 'sell', bid_price)
+                            volume_list = self.split_volume(int(data['max_volume']), combined_volume)
+                            for sub in volume_list:
+                                self.close_order(close, Direction.LONG, bid_price, sub, f'RiskCtrl{self.order_count}')
+                                self.write_log(f"平仓 {close} {Direction.LONG} {bid_price} {sub} @{self.order_count}")
+                                # time.sleep(10)  # 防止一秒内连续多次下单
+                
+                # 否则，挂止盈平仓单
                 elif 19 < data['remained_trading'] <= 130 and data['close_signal']:
                     volume_list = self.split_volume(int(data['max_volume']), volume)
                     for sub in volume_list:
@@ -640,6 +710,7 @@ class Combined(StrategyTemplate):
             except Exception as e:
                 self.write_log(f"平仓时遇到错误 {close}")
 
+        # close: vt_symbol
         for close in unclosed_positions:
             if close not in results_dict:
                 continue
@@ -657,7 +728,7 @@ class Combined(StrategyTemplate):
                     asyncio.run(self.send_feishu_async(context))
                     self.contract_send_count[close] = 1
             except Exception as e:
-                self.write_log(f"平仓时遇到错误 {close}")
+                self.write_log(f"平仓时遇到错误 {close} {traceback.format_exc()}")
 
     def pre_close_positions(self) -> None:
         """盘前止盈平仓"""
@@ -696,7 +767,7 @@ class Combined(StrategyTemplate):
                         # self.close_order(close, Direction.LONG, data['price_tick'], sub, str(self.order_count))
                         self.write_log(f"平仓 {close} {Direction.LONG} {data['price_tick']} {sub} @{self.order_count}")
             except Exception as e:
-                self.write_log(f"平仓时遇到错误 {close}")
+                self.write_log(f"平仓时遇到错误 {close} {traceback.format_exc()}")
 
     def instrument_info(self, vt_symbol: str) -> dict:
         """使用正则表达式匹配标的物（字母）、到期日（数字）、方向（'P'或'C'）、价格（数字）"""
@@ -740,6 +811,7 @@ class Combined(StrategyTemplate):
                 volumes += volume
         return volumes
 
+    # TODO 根据功能“若未平完，再循环风控”将这个函数改名
     def offset_close(self, results_dict: Dict[str, Dict]) -> None:
         """抵消平仓操作"""
         if self.order_info.empty:
@@ -763,8 +835,7 @@ class Combined(StrategyTemplate):
                 result_data = results_dict[vt_symbol]
                 signal = result_data['open_signal']
                 if current_time > row['cancel_time1'] and signal:
-                    req = CancelRequest(ordersysid=ordersysid, vt_symbol=vt_symbol, exchange=exchange)
-                    self.cancel_order_by_sysid(req)
+                    self.cancel_order_by_sysid(ordersysid)
                     self.write_log(f"撤单 {vt_symbol} {ordersysid}")
                     self.order_info.loc[index, 'status'] = Status.CANCELLED
                     time.sleep(0.5)
@@ -774,11 +845,11 @@ class Combined(StrategyTemplate):
                         vt_symbol,
                         row['exchange'],
                         'buy',
-                        f'风控{str(self.order_count)}'
+                        f'RiskCtrl{str(self.order_count)}'
                     )
                     self.write_log(f"平仓 {vt_symbol} {Direction.LONG} {result_data['option_bidPrice1'] + result_data['price_tick']} {row['volume']} @{self.order_count}")
         except Exception as e:
-            self.write_log(f"风控平仓遇到错误")
+            self.write_log(f"风控平仓遇到错误 {traceback.format_exc()}")
 
     # def cancel_orders(self) -> None:
     #     """撤销订单"""
@@ -815,8 +886,8 @@ class Combined(StrategyTemplate):
         """AV型走势平仓"""
         closed_order = self.order_info[(self.order_info['offset'].isin([Offset.CLOSE, Offset.CLOSETODAY, Offset.CLOSEYESTERDAY])) &
                                        (self.order_info['status'].isin([Status.NOTTRADED])) &
-                                       (~self.order_info['memo'].str.contains('风控')) &
-                                       (~self.order_info['memo'].str.contains('特别'))]
+                                       (~self.order_info['memo'].str.contains('RiskCtrl')) &
+                                       (~self.order_info['memo'].str.contains('Special'))]
 
         for _, row in closed_order.drop_duplicates().iterrows():
             vt_symbol = row['vt_symbol']
@@ -837,17 +908,16 @@ class Combined(StrategyTemplate):
                     combined_volume = round((1 - self.combined_volumes(data['vt_symbol'], Direction.LONG)/self.combined_volumes(data['vt_symbol'], Direction.SHORT)) * volume)
                     if combined_volume > 0:
                         volume_list = self.split_volume(int(data['max_volume']), combined_volume)
-                        req = CancelRequest(ordersysid=ordersysid, vt_symbol=vt_symbol, exchange=exchange)
-                        self.cancel_order_by_sysid(req)
+                        self.cancel_order_by_sysid(ordersysid)
                         self.write_log(f"撤单 {vt_symbol} {ordersysid}")
                         self.order_info.loc[self.order_info['ordersysid'] == ordersysid, 'status'] = Status.CANCELLED
                         time.sleep(2)  # 延迟2秒，系统需要处理时间
                         bid_price = max(data.get('option_bidPrice1', data['price_tick']), data['price_tick'])
                         for sub in volume_list:
-                            self.close_order(bid_price, sub, vt_symbol, exchange, 'buy', f'特别{str(self.order_count)}')
+                            self.close_order(bid_price, sub, vt_symbol, exchange, 'buy', f'Special{str(self.order_count)}')
                             self.write_log(f"平仓 {vt_symbol} {Direction.LONG} {bid_price} {sub} @{self.order_count}")
             except Exception as e:
-                self.write_log(f"AV走势特别平仓遇到错误 {vt_symbol}")
+                self.write_log(f"AV走势特别平仓遇到错误 {vt_symbol} {traceback.format_exc()}")
 
     # def shutdown_orders(self) -> None:
     #     """策略结束或暂停撤销所有订单"""
@@ -867,10 +937,8 @@ class Combined(StrategyTemplate):
             status = order.status
             memo = order.memo
             self.write_log(f"订单信息更新: ID={order.ordersysid}, Status={status}, Memo={memo}")
-            if status in (Status.CANCELLED, Status.ALLTRADED, Status.PARTTRADED):
-                self.orderID[memo] = None
 
-            order_df = pd.DataFrame([order.__dict__])
+            order_df = DataFrame([order.__dict__])
             # order_df.columns = order_df.columns.str.replace('^_', '', regex=True)
             if memo in self.order_info['memo'].values:
                 self.order_info.loc[self.order_info['memo'] == memo, order_df.columns] = order_df.values
@@ -881,18 +949,19 @@ class Combined(StrategyTemplate):
             self.order_info['datetime'] = pd.to_datetime(self.order_info['datetime']).apply(
                 lambda x: x.replace(year=datetime.now().year, month=datetime.now().month, day=datetime.now().day)
             )
+            # 更新还未成交的风控单的 cancel_time1，使其能够在 def offset_close 中进行再风控操作
             self.order_info['cancel_time1'] = self.order_info.apply(
                 lambda row: row['datetime'] + timedelta(seconds=120)
-                if '风控' in str(row['memo']) and row['status'] == Status.NOTTRADED
+                if 'RiskCtrl' in str(row['memo']) and ((row['status'] == Status.NOTTRADED) or (row['status'] == Status.PARTTRADED))
                 else pd.NaT,
                 axis=1
             )
-            if '风控' in str(memo) and status == Status.NOTTRADED:
+            if 'RiskCtrl' in str(memo) and status == Status.NOTTRADED:
                 context = (
                     f'账户：紫金天风期货Combined\n合约：{order.vt_symbol}\n价格：{order.price}\n数量：{order.volume}\n备注：{memo}'
                 )
                 self.write_log(f"发送飞书 {context}")
-                asyncio.run(self.send_feishu_async(context))
+                # asyncio.run(self.send_feishu_async(context))
         except Exception as e:
             self.write_log(f"处理订单更新遇到错误 {traceback.format_exc()}")
         
