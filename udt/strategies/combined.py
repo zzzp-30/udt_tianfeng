@@ -1,9 +1,8 @@
 import asyncio
-from collections import defaultdict
-from dataclasses import dataclass
 import re
 import time
 import traceback
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import time as datetime_time
 from datetime import timedelta
@@ -16,7 +15,8 @@ from pandas import DataFrame
 
 from vnpy.trader.constant import (Direction, Exchange, Offset, OptionType,
                                   OrderType, Product, Status)
-from vnpy.trader.object import CancelRequest, OrderData, PositionData, TickData, TradeData
+from vnpy.trader.object import (CancelRequest, OrderData, PositionData,
+                                TickData, TradeData)
 from vnpy.trader.utility import get_file_path
 from vnpy.utility.cooldown import Cooldown
 from vnpy_simplestrategy import StrategyEngine, StrategyTemplate
@@ -123,7 +123,6 @@ class Combined(StrategyTemplate):
         self.fund_position: Dict[str, float] = {}  # 品种: 资金占用比例
         self.order_info_cols: dict[str, str] = {
             "symbol": 'string',
-            "vt_symbol": 'string',
             "datetime": 'datetime64[ns, Asia/Shanghai]',
             "canceltime": 'datetime64[ns, Asia/Shanghai]',
             "cancel_time1": 'datetime64[ns, Asia/Shanghai]',
@@ -135,9 +134,10 @@ class Combined(StrategyTemplate):
             "offset": 'object',  # enum: Offset
             "price": 'float64',
             "type": 'object',  # enum: OrderType
-            "volume": 'int32',
-            "traded": 'int32',
-            "memo": 'string'
+            "volume": 'float64',
+            "traded": 'float64',
+            "memo": 'string',
+            "vt_symbol": 'string',
         }
         self.order_info: DataFrame = DataFrame(columns=list(self.order_info_cols.keys())).astype(self.order_info_cols)
         self.current_time: datetime = datetime.now()
@@ -1018,24 +1018,37 @@ class Combined(StrategyTemplate):
              
     def on_order(self, order: OrderData) -> None:
         """处理订单更新"""
-        if not order:
+        
+        # TODO 忽略 ordersysid 为 None 或 len(ordersysid) == 0 的订单
+        ordersysid: str | None = order.ordersysid
+        if not ordersysid:
+            # 不存在 ordersysid 则直接忽略该回报
+            # 这种情况是由 vnpy 内部直接调用 on_order 时发生的
+            # 具体参考 vnpy_ctp 的实现
+            return
+        status: Status = order.status
+        if status == Status.SUBMITTING:
+            # 如果订单状态是 SUBMITTING，则忽略该回报
+            # 这种情况对应交易所返回的 未知单 回报, 说明交易所已经收到报单请求了
+            # 但是还没有为该订单生成 ordersysid
             return
 
+        # 响应 OP1
         try:
             self.op1.try_close_position(order)
         except Exception:
             self.write_log(f"执行OP1操作时发生错误 {traceback.format_exc()}")
-            
+        
+        memo: str = order.memo
         try:
-            status = order.status
-            memo = order.memo
             self.write_log(f"订单信息更新: ID={order.ordersysid}, Status={status}, Memo={memo}")
 
-            order_df = DataFrame([order.__dict__])
-            # order_df.columns = order_df.columns.str.replace('^_', '', regex=True)
-            if memo in self.order_info['memo'].values:
-                self.order_info.loc[self.order_info['memo'] == memo, order_df.columns] = order_df.values
+            order_df: DataFrame = self.convert_order_to_df(order)
+            if ordersysid in self.order_info['ordersysid'].values:
+                # 以 ordersysid 为索引, 更新现有的订单信息
+                self.order_info.loc[self.order_info['ordersysid'] == ordersysid, order_df.columns] = order_df.values
             else:
+                # 如果 ordersysid 不在现有订单信息中，则添加新的订单信息
                 self.order_info = pd.concat([self.order_info, order_df], ignore_index=True)
 
             # Note: datetime 这一列必须都处于同一时区，注意数据来源的样子
@@ -1049,12 +1062,13 @@ class Combined(StrategyTemplate):
                 else pd.NaT,
                 axis=1
             )
+            
             if 'RiskCtrl' in str(memo) and status == Status.NOTTRADED:
                 context = (
-                    f'账户：紫金天风期货Combined\n合约：{order.vt_symbol}\n价格：{order.price}\n数量：{order.volume}\n备注：{memo}'
+                    f'新策略试运行\n账户：谦量天风\n合约：{order.vt_symbol}\n价格：{order.price}\n数量：{order.volume}\n备注：{memo}'
                 )
                 self.write_log(f"发送飞书 {context}")
-                # asyncio.run(self.send_feishu_async(context))
+                asyncio.run(self.send_feishu_async(context))
         except Exception as e:
             self.write_log(f"处理订单更新遇到错误 {traceback.format_exc()}")
         
@@ -1072,6 +1086,35 @@ class Combined(StrategyTemplate):
             self.cancel_order_by_sysid(ordersysid)
         else:
             self.cancel_order(vt_orderid)
+            
+    def to_timestamp_or_nat(self, dt: datetime | None):
+        """将 datetime 对象转换为 pd.Timestamp, 若为 None 则返回 pd.NaT"""
+        return pd.to_datetime(dt) if dt else pd.NaT
+    
+    def convert_order_to_df(self, order: OrderData) -> DataFrame:
+        """将订单数据转换为一个 DataFrame"""
+        return DataFrame(
+            data={
+                "symbol": order.symbol,
+                "exchange": order.exchange,
+                "orderid": order.orderid,
+                "ordersysid": order.ordersysid,
+                "status": order.status,
+                "direction": order.direction,
+                "offset": order.offset,
+                "price": order.price,
+                "type": order.type,
+                "volume": order.volume,
+                "traded": order.traded,
+                "datetime": self.to_timestamp_or_nat(order.datetime),
+                "canceltime": self.to_timestamp_or_nat(order.canceltime),
+                "memo": order.memo_or_none,
+                "gateway": order.gateway_name,
+                "vt_symbol": order.vt_symbol,
+                "vt_orderid": order.vt_orderid,
+            },
+            index=[0]
+        )
 
     async def send_feishu_async(self, context):
         webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/911dd4d6-d892-4723-9a56-671f91b54b82"  # 请替换为实际的 webhook URL
