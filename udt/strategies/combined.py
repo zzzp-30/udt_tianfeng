@@ -1044,7 +1044,7 @@ class Combined(StrategyTemplate):
             )
             # 更新还未成交的风控单的 cancel_time1，使其能够在 def offset_close 中进行再风控操作
             self.order_info['cancel_time1'] = self.order_info.apply(
-                lambda row: row['datetime'] + timedelta(seconds=120)
+                lambda row: row['datetime'] + timedelta(seconds=40)
                 if 'RiskCtrl' in str(row['memo']) and ((row['status'] == Status.NOTTRADED) or (row['status'] == Status.PARTTRADED))
                 else pd.NaT,
                 axis=1
