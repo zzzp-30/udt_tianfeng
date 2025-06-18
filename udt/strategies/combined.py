@@ -138,6 +138,8 @@ class Combined(StrategyTemplate):
             "traded": 'float64',
             "memo": 'string',
             "vt_symbol": 'string',
+            "vt_orderid": 'string',
+            "gateway_name": 'string',
         }
         self.order_info: DataFrame = DataFrame(columns=list(self.order_info_cols.keys())).astype(self.order_info_cols)
         self.current_time: datetime = datetime.now()
@@ -771,6 +773,8 @@ class Combined(StrategyTemplate):
                                 # time.sleep(10)  # 防止一秒内连续多次下单  # FIXME 移除
                 
                 # 否则，挂止盈平仓单
+                elif self.AV_future_condition(data, option_type):
+                    ...  # 遇到 AV 走势则不挂止盈平仓单
                 elif 19 < data['remained_trading'] <= 130 and data['close_signal']:
                     volume_list = self.split_volume(int(data['max_volume']), volume)
                     for sub in volume_list:
@@ -985,25 +989,24 @@ class Combined(StrategyTemplate):
                         volume = int(position.volume)
                 if self.AV_future_condition(data, option_type):
                     combined_volume = round((1 - self.combined_volumes(data['vt_symbol'], Direction.LONG) / self.combined_volumes(data['vt_symbol'], Direction.SHORT)) * volume)
-                    if combined_volume > 0:
-                        volume_list = self.split_volume(int(data['max_volume']), combined_volume)
-                        self.order_info.loc[self.order_info['ordersysid'] == ordersysid, 'status'] = Status.CANCELLED
-                        # time.sleep(2)  # 延迟2秒，系统需要处理时间  # FIXME 移除
-                        for sub in volume_list:
-                            direction: Direction = Direction.LONG
-                            price: float = max(data.get('option_bidPrice1', data['price_tick']), data['price_tick'])
-                            sub_volume: int = sub
-                            memo: str = f'Special{self.order_count}'
-                            
-                            params: Op1Params = Op1Params(
-                                ordersysid=ordersysid,
-                                vt_symbol=vt_symbol,
-                                direction=direction,
-                                price=price,
-                                volume=sub_volume,
-                                memo=memo,
-                            )
-                            self.op1.try_cancel_order(params)
+                    volume_list = self.split_volume(int(data['max_volume']), combined_volume)
+                    self.order_info.loc[self.order_info['ordersysid'] == ordersysid, 'status'] = Status.CANCELLED
+                    # time.sleep(2)  # 延迟2秒，系统需要处理时间  # FIXME 移除
+                    for sub in volume_list:
+                        direction: Direction = Direction.LONG
+                        price: float = max(data.get('option_bidPrice1', data['price_tick']), data['price_tick'])
+                        sub_volume: int = sub
+                        memo: str = f'Special{self.order_count}'
+                        
+                        params: Op1Params = Op1Params(
+                            ordersysid=ordersysid,
+                            vt_symbol=vt_symbol,
+                            direction=direction,
+                            price=price,
+                            volume=sub_volume,
+                            memo=memo,
+                        )
+                        self.op1.try_cancel_order(params)
             except Exception as e:
                 self.write_log(f"AV走势特别平仓遇到错误 {vt_symbol} {traceback.format_exc()}")
 
@@ -1055,6 +1058,7 @@ class Combined(StrategyTemplate):
             self.order_info['datetime'] = pd.to_datetime(self.order_info['datetime']).apply(
                 lambda x: x.replace(year=datetime.now().year, month=datetime.now().month, day=datetime.now().day)
             )
+            
             # 更新还未成交的风控单的 cancel_time1，使其能够在 def offset_close 中进行再风控操作
             self.order_info['cancel_time1'] = self.order_info.apply(
                 lambda row: row['datetime'] + timedelta(seconds=40)
@@ -1108,7 +1112,7 @@ class Combined(StrategyTemplate):
                 "traded": order.traded,
                 "datetime": self.to_timestamp_or_nat(order.datetime),
                 "canceltime": self.to_timestamp_or_nat(order.canceltime),
-                "memo": order.memo_or_none,
+                "memo": order.memo,
                 "gateway": order.gateway_name,
                 "vt_symbol": order.vt_symbol,
                 "vt_orderid": order.vt_orderid,
