@@ -98,10 +98,6 @@ class Combined(StrategyTemplate):
     """"""
     author = "Minghao Guan & Zhengyi Zhang"
     
-    tick_count = 0  # 统计 tick 次数
-    
-    variables = ["tick_count"]
-    
     def __init__(self, strategy_engine: StrategyEngine, strategy_name: str, vt_symbols: list[str], setting: dict) -> None:
         super().__init__(strategy_engine, strategy_name, vt_symbols, setting)
         
@@ -111,7 +107,7 @@ class Combined(StrategyTemplate):
         self.volume: int = 1  # 每次交易的合约数量
         self.max_volume: int = 10  # 每次启动程序最多交易的合约数量
         self.single_max: int = 1  # 每次启动程序每个合约最多交易的数量
-        self.traded_volume: int = 0
+        self.traded_volume: int = 0  # TODO 用于在测试时控制开仓数量 (和单品种不超过10%不是一回事)
         self.single_traded_volume: Dict[str, float] = {}
         self.order_count: int = 0
         self.investor: str = ''
@@ -988,8 +984,8 @@ class Combined(StrategyTemplate):
                     if position.vt_symbol == vt_symbol and position.direction == Direction.SHORT:
                         volume = int(position.volume)
                 if self.AV_future_condition(data, option_type):
-                    combined_volume = round((1 - self.combined_volumes(data['vt_symbol'], Direction.LONG) / self.combined_volumes(data['vt_symbol'], Direction.SHORT)) * volume)
-                    volume_list = self.split_volume(int(data['max_volume']), combined_volume)
+                    combined_volume: int = round((1 - self.combined_volumes(data['vt_symbol'], Direction.LONG) / self.combined_volumes(data['vt_symbol'], Direction.SHORT)) * volume)
+                    volume_list: list[int] = self.split_volume(int(data['max_volume']), combined_volume)
                     self.order_info.loc[self.order_info['ordersysid'] == ordersysid, 'status'] = Status.CANCELLED
                     # time.sleep(2)  # 延迟2秒，系统需要处理时间  # FIXME 移除
                     for sub in volume_list:
@@ -1006,6 +1002,7 @@ class Combined(StrategyTemplate):
                             volume=sub_volume,
                             memo=memo,
                         )
+                        
                         self.op1.try_cancel_order(params)
             except Exception as e:
                 self.write_log(f"AV走势特别平仓遇到错误 {vt_symbol} {traceback.format_exc()}")
