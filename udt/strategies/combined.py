@@ -1108,8 +1108,8 @@ class Combined(StrategyTemplate):
             mask_orders_in_risk_ctrl = self.order_info['memo'].str.contains('RiskCtrl')
             mask_orders_on_pending = (self.order_info['status'] == Status.NOTTRADED) | (self.order_info['status'] == Status.PARTTRADED)
             mask_orders_to_risk_ctrl_loop = mask_orders_in_risk_ctrl & mask_orders_on_pending
-            self.order_info['cancel_time1'] = pd.Series(pd.NaT, dtype='datetime64[ns, Asia/Shanghai]')
-            self.order_info.loc[mask_orders_to_risk_ctrl_loop, 'cancel_time1'] = self.order_info.loc[mask_orders_to_risk_ctrl_loop, 'datetime'] + timedelta(seconds=40)
+            self.order_info['cancel_time1'] = pd.Series(pd.NaT, dtype='datetime64[ns, Asia/Shanghai]')  # Note: 必须指定 dtype 使 NaT 带上时区
+            self.order_info.loc[mask_orders_to_risk_ctrl_loop, 'cancel_time1'] = self.order_info.loc[mask_orders_to_risk_ctrl_loop, 'datetime'] + pd.Timedelta(seconds=self.loop_risk_ctrl_cooldown)
             
             if 'RiskCtrl' in str(memo) and status == Status.NOTTRADED:
                 product_name: str = self.results.loc[self.results['vt_symbol'] == order.vt_symbol, '期货'].item()
