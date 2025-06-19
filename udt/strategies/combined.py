@@ -1100,12 +1100,11 @@ class Combined(StrategyTemplate):
             
             # 更新还未成交的风控单的 cancel_time1，使其能够在 def offset_close 中进行再风控操作
             # Note: 截止至 2025/6/18 如果存在 cancel_time1 则说明需要循环风控, 没有则说明不需要
-            self.order_info['cancel_time1'] = self.order_info.apply(
-                lambda row: row['datetime'] + timedelta(seconds=40)
-                if 'RiskCtrl' in str(row['memo']) and ((row['status'] == Status.NOTTRADED) or (row['status'] == Status.PARTTRADED))
-                else pd.NaT,
-                axis=1
-            )
+            mask_orders_in_risk_ctrl = self.order_info['memo'].str.contains('RiskCtrl')
+            mask_orders_on_pending = (self.order_info['status'] == Status.NOTTRADED) | (self.order_info['status'] == Status.PARTTRADED)
+            mask_orders_to_risk_ctrl_loop = mask_orders_in_risk_ctrl & mask_orders_on_pending
+            self.order_info['cancel_time1'] = pd.Series(pd.NaT, dtype='datetime64[ns, Asia/Shanghai]')
+            self.order_info.loc[mask_orders_to_risk_ctrl_loop, 'cancel_time1'] = self.order_info.loc[mask_orders_to_risk_ctrl_loop, 'datetime'] + timedelta(seconds=40)
             
             if 'RiskCtrl' in str(memo) and status == Status.NOTTRADED:
                 product_name: str = self.results.loc[self.results['vt_symbol'] == order.vt_symbol, '期货'].item()
