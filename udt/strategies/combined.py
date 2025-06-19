@@ -1231,14 +1231,15 @@ class Combined(StrategyTemplate):
         Returns:
             str: 格式化后的成交信息字符串.
         """
+        # 换行记录成交信息的各个部分, 在日志中看起来比较显眼
         return (
             f"成交信息: "
-            f"合约={data.vt_symbol}, "
-            f"编号={data.tradeid}, "
-            f"方向={data.direction}, "
-            f"开平={data.offset}, "
-            f"价格={data.price}, "
-            f"数量={data.volume}, "
+            f"合约={data.vt_symbol}\n"
+            f"编号={data.tradeid}\n"
+            f"方向={data.direction}\n"
+            f"开平={data.offset}\n"
+            f"价格={data.price}\n"
+            f"数量={data.volume}\n"
             f"成交时间={data.datetime}"
         )
     
