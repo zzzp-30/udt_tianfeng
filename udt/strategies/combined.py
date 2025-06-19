@@ -419,7 +419,7 @@ class Combined(StrategyTemplate):
         for vt_symbol, vt_positionid in close_positions:
             if vt_symbol in self.option_vt_symbols:
                 symbol_info = self.main_engine.get_contract(vt_symbol)
-                product = symbol_info.option_portfolio  # 品种, 例如 lc2508-C-94000 就是 lc_o
+                product = self.convert_symbol_to_canconinal(symbol_info.option_portfolio)  # 品种, 例如 lc2508-C-94000 就是 lc_o
                 option_type = symbol_info.option_type.value
                 product_type = product + option_type
                 percent = self.cal_fund_tie(vt_positionid)
@@ -1144,6 +1144,16 @@ class Combined(StrategyTemplate):
         """
         
         return pd.to_datetime(dt) if dt else pd.NaT
+    
+    def convert_symbol_to_canconinal(self, tianfeng_symbol: str) -> str:
+        """
+        将柜台返回的 symbol 转换为标准形式.
+        
+        为什么需要这个函数?
+        因为不同柜台返回的 symbol 不尽相同, 需要进行转换.
+        比如紫金天风柜台返回的郑商所甲醇是 MA, 而标准形式是 MA_O.
+        """
+        return self.product_mapping_dict[tianfeng_symbol]
     
     def convert_order_to_df(self, order: OrderData) -> DataFrame:
         """
