@@ -22,7 +22,12 @@ from vnpy.trader.utility import get_file_path
 from vnpy.utility.cooldown import Cooldown
 from vnpy_simplestrategy import StrategyEngine, StrategyTemplate
 
+
 CHINA_TZ: ZoneInfo = ZoneInfo("Asia/Shanghai")
+
+# FIXME see: https://pandas.pydata.org/pandas-docs/stable/user_guide/copy_on_write.html
+pd.options.mode.copy_on_write = False  # 默认值是 'warn'
+pd.options.mode.chained_assignment = None  # 默认值是 'warn'
 
 
 @dataclass
