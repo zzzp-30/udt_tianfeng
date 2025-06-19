@@ -8,7 +8,7 @@ from time import sleep
 
 from vnpy.trader.setting import SETTINGS
 from vnpy.trader.engine import MainEngine, EventEngine, OmsEngine
-from vnpy.trader.object import *
+from vnpy.trader.object import OrderData, TradeData, PositionData, AccountData
 # from vnpy_tts import TtsGateway
 from vnpy_ctp import CtpGateway
 # from vnpy_ctptest import CtptestGateway
@@ -136,7 +136,7 @@ def run_child() -> None:
     main_engine: MainEngine = MainEngine()
     
     # 获取订单引擎
-    oms_engine: OmsEngine = main_engine.get_engine("oms")
+    oms_engine: OmsEngine = main_engine.get_engine("oms") # type: ignore
     
     # 使用 TtsGateway
     # main_engine.add_gateway(TtsGateway)
@@ -144,7 +144,7 @@ def run_child() -> None:
     
     # 使用 CtpGateway
     main_engine.add_gateway(CtpGateway)
-    main_gateway: CtpGateway = main_engine.get_gateway("CTP")
+    main_gateway: CtpGateway = main_engine.get_gateway("CTP") # type: ignore
     
     # 使用 CtptestGateway
     # main_engine.add_gateway(CtptestGateway)
@@ -179,7 +179,7 @@ def run_child() -> None:
     # --- 创建 SimpleStrategy App ---
     
     # 添加 App
-    strategy_engine: StrategyEngine = main_engine.add_app(SimpleStrategyApp)
+    strategy_engine: StrategyEngine = main_engine.add_app(SimpleStrategyApp) # type: ignore
     # 初始化 Engine
     strategy_engine.init_engine()
     # 打印已加载的 strategy classes
@@ -191,16 +191,16 @@ def run_child() -> None:
     
     # --- 账户相关信息 ---
     
-    main_engine.write_log("当前账号的所有订单信息:")
+    main_engine.write_log("订单信息(所有账号):")
     [main_engine.write_log(f"vt_symbol={order.vt_symbol}, vt_orderid={order.vt_orderid}, ordersysid={order.ordersysid}, direction={order.direction}, offset={order.offset}, status={order.status} @{order.price}") for order in main_engine.get_all_orders()]
     
-    main_engine.write_log("当前账号的所有成交信息:")
+    main_engine.write_log("成交信息(所有账号):")
     [main_engine.write_log(f"vt_symbol={trade.vt_symbol}, vt_orderid={trade.vt_orderid}, direction={trade.direction}, offset={trade.offset} @{trade.price}") for trade in main_engine.get_all_trades()]
     
-    main_engine.write_log("当前账号的所有持仓信息:")
+    main_engine.write_log("持仓信息(所有账号):")
     [main_engine.write_log(f"vt_symbol={pos.vt_symbol}, volume={pos.volume}, frozen={pos.frozen}, vt_positionid={pos.vt_positionid} @{pos.price}") for pos in main_engine.get_all_positions()]
     
-    main_engine.write_log("当前账号的账户信息:")
+    main_engine.write_log("账户信息(所有):")
     [main_engine.write_log(f"vt_accountid={acc.vt_accountid}, balance={acc.balance}, frozen={acc.frozen}, available={acc.available}") for acc in main_engine.get_all_accounts()]
     
     # --- 订阅所有期权合约 ---
@@ -210,7 +210,7 @@ def run_child() -> None:
         trading = check_trading_period()
         if not trading:
             print("关闭子进程")
-            main_engine.close()
+            main_engine.close()  # FIXME no attr: cancel_all
             sys.exit(0)
 
 
@@ -232,7 +232,7 @@ def run_parent() -> None:
             child_process.start()
             print("子进程启动成功")
 
-        # 非记录时间则退出子进程
+        # Stop child process if not in trading period
         if not trading and child_process is not None:
             if not child_process.is_alive():
                 child_process = None
