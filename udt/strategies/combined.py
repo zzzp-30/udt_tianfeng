@@ -926,7 +926,7 @@ class Combined(StrategyTemplate):
         
         # 可平量大于 0 的空头持仓
         closable_positions: list[tuple[str, int]] = [
-            (position.vt_symbol, (position.volume - position.frozen))
+            (position.vt_symbol, int(position.volume - position.frozen))
             for position in total_positions
             if (position.volume - position.frozen) > 0 and position.direction == Direction.SHORT
         ]
