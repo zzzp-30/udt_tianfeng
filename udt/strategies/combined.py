@@ -129,17 +129,18 @@ class Combined(StrategyTemplate):
         
         # --- 策略参数 ---
         
-        # TODO 每个策略应该对应一个投资者账号
-        self.investor: str = ''
-        self.volume: int = 1  # 每次交易的合约数量
-        self.max_volume: int = 10  # 每次启动程序最多交易的合约数量
-        self.single_max: int = 1  # 每次启动程序每个合约最多交易的数量
-        self.loop_risk_ctrl_cooldown: int = 40  # 同个持仓两个循环风控的最小间隔, 单位: 秒
+        self.investor: str = ''  # TODO 每个策略应该对应一个投资者账号, 之后会用到
+        self.volume_per_open_position: int = 1  # 每次开仓时交易的合约数量
+        self.max_open_position_volume_in_total: int = 10  # 每次启动程序最多交易的合约数量
+        self.max_open_position_volume_per_contract: int = 1  # 每次启动程序每个合约最多交易的数量
+        self.loop_risk_ctrl_cooldown: int = 40  # 同个报单两个循环风控的最小间隔, 单位: 秒
         
         # --- 策略状态 ---
         
-        # TODO 用于在测试时控制开仓数量 (和单品种不超过10%不是一回事)
-        self.traded_volume: int = 0
+        # TODO 这两个变量用于在测试时控制开仓数量
+        # 对的, 策略已经有"单品种开仓不超过10%可用资金"的限制, 但这个限制主要是用于测试时控制开仓数量.
+        # 按照邹老师的说法, 正式运行时不需要此限制.
+        self.total_traded_volume: int = 0
         self.single_traded_volume: dict[str, float] = {}
         
         # 仅仅用于标记订单操作序号, 无实际用途
@@ -630,7 +631,7 @@ class Combined(StrategyTemplate):
                             direction: Direction = Direction.SHORT
                             ask_price_1: float = row['option_askPrice1']
                             bid_price_1: float = row['option_bidPrice1']
-                            volume: int = self.volume
+                            volume: int = self.volume_per_open_position
                             memo: str = str(self.order_count)
                             
                             self.write_log(f"请求以卖一价开仓 合约={vt_symbol} 方向={direction} 手数={volume} Memo={memo} @{ask_price_1}")
@@ -641,7 +642,7 @@ class Combined(StrategyTemplate):
                             
                             # 更新计数器, 限制策略开仓数量
                             # Note: 主要是为了测试而添加的限制, 除此之外已经有根据品种占用的资金比例来限制开仓的机制了
-                            self.traded_volume += self.volume * 2
+                            self.total_traded_volume += self.volume_per_open_position * 2
                             self.single_traded_volume[vt_symbol] = self.single_traded_volume.get(vt_symbol, 0) + volume * 2
                         except Exception:
                             self.write_log(f"开仓时遇到错误 ({row['vt_symbol']}) {traceback.format_exc()}")
@@ -700,9 +701,9 @@ class Combined(StrategyTemplate):
             and
             self.fund_position[product_type] < 0.1
             and
-            self.traded_volume < self.max_volume
+            self.total_traded_volume < self.max_open_position_volume_in_total
             and
-            self.single_traded_volume.get(row['vt_symbol'], 0) < self.single_max
+            self.single_traded_volume.get(row['vt_symbol'], 0) < self.max_open_position_volume_per_contract
             and
             self.open_position_cooldown.test()
         )
