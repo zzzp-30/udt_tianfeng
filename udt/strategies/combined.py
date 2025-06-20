@@ -547,9 +547,9 @@ class Combined(StrategyTemplate):
         """处理并清理数据"""
         try:
             for vt_symbol, data in self.option_update.items():
-                self.results.loc[self.results['vt_symbol'] == vt_symbol, data.keys()] = list(data.values())
+                self.results.loc[self.results['vt_symbol'] == vt_symbol, list(data.keys())] = list(data.values())
             for vt_symbol, data in self.future_update.items():
-                self.results.loc[self.results['underlying_vt_symbol'] == vt_symbol, data.keys()] = list(data.values())
+                self.results.loc[self.results['underlying_vt_symbol'] == vt_symbol, list(data.keys())] = list(data.values())
 
             self.product_fund_tie()
             self.process_results_by_product()
