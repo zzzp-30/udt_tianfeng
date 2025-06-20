@@ -147,6 +147,8 @@ class Combined(StrategyTemplate):
         self.order_count: int = 0
         # 由 self.on_tick 无条件递增, 当达到订阅的合约数量时, 执行一次交易逻辑
         self.updated_count: int = 0
+        # 来自柜台的品种代码 到 标准品种代码 的映射. 不同柜台(或者不同投资者账号)的映射有所不同
+        self.product_mapping_dict: dict[str, str] = {}
         # 每个合约的参数和状态, 包括期权和期货
         self.results_cols: dict[str, str] = {
             'product': 'string',
@@ -293,7 +295,7 @@ class Combined(StrategyTemplate):
         # 具体的映射关系请直接参考这里加载的 product_mapping.csv 文件
         # 不同柜台返回的 product 不尽相同, 转换成标准格式以方便执行后续算法
         product_mapping: DataFrame = pd.read_csv(get_file_path("product_mapping.csv"), encoding='utf-8', dtype={'exchange': 'str', 'canonical_product': 'str', 'tianfeng_product': 'str'})
-        self.product_mapping_dict: dict[str, str] = dict(zip(product_mapping['tianfeng_product'], product_mapping['canonical_product']))
+        self.product_mapping_dict |= dict(zip(product_mapping['tianfeng_product'], product_mapping['canonical_product']))
         self.results['product'] = self.results['product'].map(self.product_mapping_dict).fillna(self.results['product'])
         
         # 将固定参数 params LEFT JOIN 到 self.results
