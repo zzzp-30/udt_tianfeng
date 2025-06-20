@@ -1237,6 +1237,14 @@ class Combined(StrategyTemplate):
         """
         return self.product_mapping_dict[tianfeng_symbol]
     
+    # TODO
+    def convert_contract_to_df(self, contract: ContractData) -> DataFrame:
+        """
+        将 ContractData 转换为一个 DataFrame.
+        """
+        return DataFrame(
+        )
+    
     def convert_order_to_df(self, order: OrderData) -> DataFrame:
         """
         将 OrderData 转换为一个 DataFrame.
