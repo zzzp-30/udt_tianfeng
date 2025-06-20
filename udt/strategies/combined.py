@@ -1,14 +1,11 @@
-import asyncio
 import re
 import time
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import time as datetime_time
-from datetime import timedelta
 from zoneinfo import ZoneInfo
 
-import aiohttp
 import akshare as ak  # 从akshare数据库中获取期货历史数据
 import pandas as pd
 from pandas import DataFrame, DatetimeIndex, Series
@@ -23,12 +20,29 @@ from vnpy.utility.cooldown import (Cooldown, CooldownMap, StackableCooldown,
                                    StackableCooldownMap)
 from vnpy_simplestrategy import StrategyEngine, StrategyTemplate
 
-CHINA_TZ: ZoneInfo = ZoneInfo("Asia/Shanghai")
-
 # FIXME see: https://pandas.pydata.org/pandas-docs/stable/user_guide/copy_on_write.html
 pd.options.mode.copy_on_write = False  # 默认值是 'warn'
 pd.options.mode.chained_assignment = None  # 默认值是 'warn'
 
+# 东八区
+CHINA_TZ: ZoneInfo = ZoneInfo("Asia/Shanghai")
+
+# 本策略使用的飞书自定义机器人
+feishu_webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/911dd4d6-d892-4723-9a56-671f91b54b82"
+# 本策略使用的飞书消息模板
+feishu_message_template = lambda ctx: {
+    "msg_type": "interactive",
+    "card": {
+        "type": "template",
+        "data": {
+            "template_id": "AAqCu6ucc7bwF",
+            "template_version_name": "1.0.3",
+            "template_variable": {
+                "order_info": f"{ctx}"
+            }
+        }
+    }
+}
 
 @dataclass
 class Op1Params:
@@ -151,7 +165,10 @@ class AvTempFix1:  # FIXME 更好的类命名
                 f'合约：{vt_symbol}\n'
                 f'AV走势平仓错误\n'
             )
-            asyncio.run(self.strategy.send_feishu_async(context))
+            self.strategy.main_engine.send_feishu(
+                feishu_webhook_url,
+                feishu_message_template(context),
+            )
 
 class Combined(StrategyTemplate):
     """
@@ -1031,6 +1048,10 @@ class Combined(StrategyTemplate):
                         f"风控平仓待报入"
                     )
                     self.write_log(context)
+                    self.main_engine.send_feishu(
+                        feishu_webhook_url,
+                        feishu_message_template(context)
+                    )
                     self.contract_send_count[vt_symbol] = 1
                     asyncio.run(self.send_feishu_async(context))
             except Exception:
@@ -1254,7 +1275,10 @@ class Combined(StrategyTemplate):
                     f'备注：{order.memo}'
                 )
                 self.write_log(context)
-                asyncio.run(self.send_feishu_async(context))  # FIXME 采用消息队列而非事件循环以避免阻塞事件线程
+                self.main_engine.send_feishu(
+                    feishu_webhook_url,
+                    feishu_message_template(context),
+                )
         except Exception:
             self.write_log(f"处理订单更新遇到错误 {traceback.format_exc()}")
 
@@ -1408,25 +1432,3 @@ class Combined(StrategyTemplate):
             f"数量={series['volume']}, "
             f"Memo={series['memo']}"
         )
-
-    async def send_feishu_async(self, context):
-        webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/911dd4d6-d892-4723-9a56-671f91b54b82"  # 请替换为实际的 webhook URL
-        message = {
-            "msg_type": "interactive",
-            "card": {
-                "type": "template",
-                "data": {
-                    "template_id": "AAqCu6ucc7bwF",
-                    "template_version_name": "1.0.3",
-                    "template_variable": {
-                        "order_info": f"{context}"
-                    }
-                }
-            }
-        }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(webhook_url, json=message) as response:
-                    return await response.json()
-        except Exception:
-            self.write_log(f"发送飞书消息失败 {context} {traceback.format_exc()}")
