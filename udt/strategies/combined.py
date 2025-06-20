@@ -11,13 +11,13 @@ from zoneinfo import ZoneInfo
 import aiohttp
 import akshare as ak  # 从akshare数据库中获取期货历史数据
 import pandas as pd
-from pandas import DataFrame, Series
+from pandas import DataFrame, DatetimeIndex, Series
 
 from vnpy.trader.constant import (Direction, Exchange, Offset, OptionType,
                                   OrderType, Product, Status)
 from vnpy.trader.engine import MainEngine
-from vnpy.trader.object import (CancelRequest, ContractData, OrderData, PositionData,
-                                TickData, TradeData)
+from vnpy.trader.object import (CancelRequest, ContractData, OrderData,
+                               PositionData, TickData, TradeData)
 from vnpy.trader.utility import get_file_path
 from vnpy.utility.cooldown import Cooldown
 from vnpy_simplestrategy import StrategyEngine, StrategyTemplate
@@ -36,10 +36,10 @@ class Op1Params:
     撤单、然后平仓操作的参数.
     """
     
-    # 撤单用
+    # 撤单用的参数
     ordersysid: str
     
-    # 平仓用
+    # 平仓用的参数
     vt_symbol: str  # format: symbol.exchange
     direction: Direction
     price: float
@@ -47,9 +47,24 @@ class Op1Params:
     memo: str
 
 
-class Op1:
+class Op1:  # FIXME 更好的类命名
     """
-    该类型封装了一个“撤单，等待交易所回报，再平仓”的操作.
+    该类型封装了一个“撤单，再平仓”的操作.
+    
+    背景:
+    本策略中有一个基本操作就是“撤单，再平仓”.
+    具体来说, 撤单是向交易所发送撤单请求, 它并不是一个"调用了撤单函数就一定能够成功撤单"的简单情况.
+    撤单可能会因为网络等问题而撤单失败 (即使概率很小). 判断一个撤单是否成功的唯一标准就是等待交易所的回报. 
+    也就是说, 一个健壮的"撤单, 再平仓"的操作实际上应该是"撤单, 等待交易所回报, 再平仓"的流程.
+    而这个类就封装了这一整个操作, 把整个过程所需要维护的状态封装了一个对象, 方便外部使用.
+    
+    使用方式:
+    首先, 确保在报单回调函数 (on_order) 中无条件调用 self.try_close_position.
+    也就是说, 无论是什么报单回报, 只要有新的报单回报 (OrderData), 都要传给 self.try_close_position.
+    剩下的操作就是在需要""撤单再平仓"的地方调用 self.try_cancel_order 方法, 传入一个 Op1Params 对象作为参数.
+    
+    使用效果:
+    调用 self.try_cancel_order 后, 如果策略收到了对应的撤单回报, 将自动发起既定的平仓操作.
     """
     
     def __init__(self, strategy: "Combined") -> None:
@@ -59,6 +74,7 @@ class Op1:
     def try_cancel_order(self, params: Op1Params) -> None:
         """
         向交易所发送撤单请求.
+        
         如果撤单成功, 一个状态为"已撤单"的报单回报会发送到 strategy#on_order 函数.
         在 strategy#on_order 函数内部应该无条件调用 self.try_close_position.
         """
@@ -95,13 +111,16 @@ class Op1:
                 memo=params.memo
             )
             
-        # 移除数据
+        # 操作完成, 重置状态
         self.params_map.pop(ordersysid)
 
 
 class Combined(StrategyTemplate):
-    """"""
-    author = "Minghao Guan & Zhengyi Zhang"
+    """
+    所谓的"主策略". TODO 想个更加具体点儿的策略名. "比较级命名"没有比较对象的话信息量太低.
+    """
+    
+    author = "Minghao Guan & Zheyin Zeng"
     
     def __init__(self, strategy_engine: StrategyEngine, strategy_name: str, vt_symbols: list[str], setting: dict) -> None:
         super().__init__(strategy_engine, strategy_name, vt_symbols, setting)
@@ -596,7 +615,7 @@ class Combined(StrategyTemplate):
         return not conflict_found  # 返回是否可以安全下单
 
     def open_positions(self, target_option: DataFrame) -> None:
-        """开仓操作"""
+        """开仓"""
         current_time = self.current_time.time()
         if (
             datetime.strptime('09:10', '%H:%M').time() <= current_time <= datetime.strptime('11:27', '%H:%M').time() or
@@ -776,6 +795,7 @@ class Combined(StrategyTemplate):
         FIXME 你可能会想, 为什么这个函数的说明里写着 "风控前撤单", 但却不是第一个执行的操作?
         FIXME 比如撤单后, 等待交易所回报, 确认报单已撤销, 然后再发新的风控平仓单.
         FIXME 原因是那么那么写有点复杂, 但实际上应该是要这样的.
+        FIXME 等有机会再重构这一块代码吧.
         """
         # 目标报单为: 平仓,未成交,非风控(止盈)
         target_orders = self.order_info[
@@ -800,7 +820,7 @@ class Combined(StrategyTemplate):
                     self.check_future_condition(data, option_type) and
                     self.check_option_condition(data)
                 ):
-                    self.write_log(f"风控前撤单请求撤单 {self.generate_order_info_string_from_series(row)}")
+                    self.write_log(f"风控前撤单 请求撤单 {self.generate_order_info_string_from_series(row)}")
                     self.cancel_order_by_sysid(ordersysid)
                     self.order_info.loc[self.order_info['ordersysid'] == ordersysid, 'status'] = Status.CANCELLED  # FIXME 要留着吗? 实际上要等  on_order 更新才是真的撤单
             except Exception:
@@ -830,7 +850,7 @@ class Combined(StrategyTemplate):
                     self.check_future_condition(data, option_type) and
                     self.check_option_condition(data)
                 ):
-                    self.write_log(f"开仓前风控请求撤单 {self.generate_order_info_string_from_series(row)}")
+                    self.write_log(f"开仓前风控 请求撤单 {self.generate_order_info_string_from_series(row)}")
                     self.cancel_order_by_sysid(ordersysid)
             except Exception:
                 self.write_log(f"开仓前风控时遇到错误 {self.generate_order_info_string_from_series(row)}")
@@ -887,7 +907,7 @@ class Combined(StrategyTemplate):
                             self.avoid_self_dealing(vt_symbol, Direction.LONG, bid_price)
                             volume_list = self.split_volume(int(data['max_volume']), combined_volume)
                             for sub in volume_list:
-                                self.write_log(f"风控请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{bid_price}")
+                                self.write_log(f"风控 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{bid_price}")
                                 self.request_close_position(vt_symbol, Direction.LONG, bid_price, sub, f'RiskCtrl{self.order_count}')
                 
                 # 如果满足AV走势, 则什么也不做
@@ -898,16 +918,18 @@ class Combined(StrategyTemplate):
                 elif 19 < data['remained_trading'] <= 130 and data['close_signal']:
                     volume_list = self.split_volume(int(data['max_volume']), close_available_volume)
                     for sub in volume_list:
-                        self.write_log(f"止盈请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick'] * 3}")
+                        self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick'] * 3}")
                         self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'] * 3, sub, str(self.order_count))
                 elif 11 < data['remained_trading'] <= 19 and data['close_signal']:
                     volume_list = self.split_volume(int(data['max_volume']), close_available_volume)
                     for sub in volume_list:
+                        self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
                         self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'], sub, str(self.order_count))
                         self.write_log(f"止盈请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
                 elif 6 < data['remained_trading'] <= 11 and data['close_signal']:
                     volume_list = self.split_volume(int(data['max_volume']), close_available_volume)
                     for sub in volume_list:
+                        self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
                         self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'], sub, str(self.order_count))
                         self.write_log(f"止盈请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
             except Exception:
@@ -1026,7 +1048,7 @@ class Combined(StrategyTemplate):
 
     @staticmethod
     def AV_future_condition(data: dict, option_type: OptionType) -> bool:
-        """AV型走势，及行情短时间剧烈下跌，但随后又迅速反弹的情况"""
+        """AV型走势，即行情短时间剧烈下跌，但随后又迅速反弹的情况"""
         last_price = data['future_lastPrice']  # 期货最新价
         pre_close = data['future_preClosePrice']  # 期货昨收价
         open_price = data['future_openPrice']  # 期货开盘价
@@ -1139,9 +1161,13 @@ class Combined(StrategyTemplate):
             if 'RiskCtrl' in str(order.memo) and order.status == Status.NOTTRADED:
                 product_name: str = self.results.loc[self.results['vt_symbol'] == order.vt_symbol, '期货'].item()
                 context = (
-                    f'账户：谦量天风\n合约：{product_name} {order.vt_symbol}\n价格：{order.price}\n数量：{order.volume}\n备注：{order.memo}'
+                    f'账户：谦量天风\n'
+                    f'合约：{product_name} {order.vt_symbol}\n'
+                    f'价格：{order.price}\n'
+                    f'数量：{order.volume}\n'
+                    f'备注：{order.memo}'
                 )
-                self.write_log(f"发送飞书 {context}")
+                self.write_log(context)
                 asyncio.run(self.send_feishu_async(context))  # FIXME 采用消息队列而非事件循环以避免阻塞事件线程
         except Exception:
             self.write_log(f"处理订单更新遇到错误 {traceback.format_exc()}")
