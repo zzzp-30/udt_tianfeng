@@ -133,7 +133,7 @@ class AvTempFix1:  # FIXME 更好的类命名
         # 用于限制一个合约在1小时内最多发送3次提醒
         self.stackable_cooldown_map: StackableCooldownMap[str] = StackableCooldownMap[str](base=Cooldown(timeout_seconds=7200.0), stacks=3)
     
-    def send_feishu_message(self, vt_symbol: str) -> None:
+    def notify(self, vt_symbol: str) -> None:
         """
         发送飞书消息, 告知出现了AV走势平仓错误.
         
@@ -1169,11 +1169,11 @@ class Combined(StrategyTemplate):
                         self.op1.try_cancel_order(params)
             except Exception as e:
                 # 发送飞书消息  # FIXME 临时措施. 等AV走势平仓错误修复后应该移除
-                self.av_temp_fix_1.send_feishu_message(vt_symbol)
+                self.av_temp_fix_1.notify(vt_symbol)
                 
                 # 写入日志文件
                 self.write_log(f"AV走势特别平仓遇到错误 ({vt_symbol}) {traceback.format_exc()}")
-             
+
     def on_order(self, order: OrderData) -> None:
         """处理订单更新"""
         
