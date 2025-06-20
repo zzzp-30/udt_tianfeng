@@ -256,7 +256,6 @@ class Combined(StrategyTemplate):
         """ 初始化 results DataFrame"""
         all_contracts = self.main_engine.get_all_contracts()
         for contract_info in all_contracts:
-            # if contract_info.product == Product.OPTION and contract_info.option_portfolio in product_list:
             # TODO 添加函数 convert_contract_data_to_df, 在这里就把格式转换为统一的
             if contract_info.product == Product.OPTION and contract_info.exchange in exchange_list:
                 contracts_data = []
