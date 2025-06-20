@@ -160,8 +160,24 @@ class Combined(StrategyTemplate):
     
     author = "Minghao Guan & Zheyin Zeng"
     
-    def __init__(self, strategy_engine: StrategyEngine, strategy_name: str, vt_symbols: list[str], setting: dict) -> None:
-        super().__init__(strategy_engine, strategy_name, vt_symbols, setting)
+    def __init__(
+        self,
+        strategy_engine: StrategyEngine,
+        strategy_name: str,
+        vt_symbols: list[str],
+        setting: dict
+    ) -> None:
+        """
+        实例的初始化函数.
+        
+        该函数仅仅用于定义所有使用到的成员变量 (即 self...), 不执行任何复杂或者耗时的操作.
+        """
+        super().__init__(
+            strategy_engine,
+            strategy_name,
+            vt_symbols,  # vt_symbols 会在 on_init 里被重写  # FIXME 更加规范的订阅合约写法
+            setting
+        )
         
         self.main_engine: MainEngine = self.strategy_engine.main_engine
         
@@ -291,7 +307,11 @@ class Combined(StrategyTemplate):
         
         # 构建 product_type 列, 形如: MA看涨期权, ao看跌期权
         self.results['product_type'] = self.results['product'] + self.results['option_type'].apply(lambda x: x.value)
-
+    
+    ############################################################
+    # 初始化逻辑 - 开始
+    ############################################################
+    
     def initialize_results(self, exchange_list: list[Exchange]) -> None:
         """ 初始化 results DataFrame"""
         all_contracts = self.main_engine.get_all_contracts()
@@ -420,7 +440,11 @@ class Combined(StrategyTemplate):
         self.vt_symbols = option_vt_symbols + future_vt_symbols  # TODO 暂时这么写😭未来应该使用专门的函数来订阅合约
         
         self.total_instruments_num = len(self.vt_symbols)
-
+    
+    ############################################################
+    # 初始化逻辑 - 结束
+    ############################################################
+    
     def on_start(self) -> None:
         """策略启动"""
         ...
