@@ -1212,13 +1212,13 @@ class Combined(StrategyTemplate):
                 lambda x: x.replace(year=datetime.now().year, month=datetime.now().month, day=datetime.now().day)
             )
             
-            # 更新还未成交的风控单的 cancel_time1，使其能够在 def close_positons_for_loop_risk_ctrl 中进行再风控操作
-            # Note: 截止至 2025/6/18 如果存在 cancel_time1 则说明需要循环风控, 没有则说明不需要
+            # 更新还未成交的风控单的 'loop_risk_ctrl_time'，使其能够在 def close_positons_for_loop_risk_ctrl 中进行再风控操作
+            # 目前的程序逻辑: 如果 self.order_info 的 'loop_risk_ctrl_time' 列不为 NaT 则说明需要循环风控, 没有则说明不需要
             mask_orders_in_risk_ctrl = self.order_info['memo'].str.contains('RiskCtrl')
             mask_orders_on_pending = (self.order_info['status'] == Status.NOTTRADED) | (self.order_info['status'] == Status.PARTTRADED)
-            mask_orders_to_risk_ctrl_loop = mask_orders_in_risk_ctrl & mask_orders_on_pending
+            mask_orders_to_loop_risk_ctrl = mask_orders_in_risk_ctrl & mask_orders_on_pending
             self.order_info['loop_risk_ctrl_time'] = pd.Series(pd.NaT, dtype='datetime64[ns, Asia/Shanghai]')  # Note: 必须指定 dtype 使 NaT 带上时区
-            self.order_info.loc[mask_orders_to_risk_ctrl_loop, 'loop_risk_ctrl_time'] = self.order_info.loc[mask_orders_to_risk_ctrl_loop, 'datetime'] + pd.Timedelta(seconds=self.loop_risk_ctrl_cooldown)
+            self.order_info.loc[mask_orders_to_loop_risk_ctrl, 'loop_risk_ctrl_time'] = self.order_info.loc[mask_orders_to_loop_risk_ctrl, 'datetime'] + pd.Timedelta(seconds=self.loop_risk_ctrl_cooldown)
             
             if 'RiskCtrl' in str(order.memo) and order.status == Status.NOTTRADED:
                 product_name: str = self.results.loc[self.results['vt_symbol'] == order.vt_symbol, '期货'].item()
