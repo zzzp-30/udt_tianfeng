@@ -144,7 +144,7 @@ class AvTempFix1:  # FIXME 更好的类命名
         self.strategy: Combined = strategy
         # 用于限制一个合约在5分钟内最多发送1次提醒
         self.cooldown_map: CooldownMap[str] = CooldownMap[str](base=Cooldown(timeout_seconds=300.0))
-        # 用于限制一个合约在1小时内最多发送3次提醒
+        # 用于限制一个合约在2小时内最多发送3次提醒
         self.stackable_cooldown_map: StackableCooldownMap[str] = StackableCooldownMap[str](base=Cooldown(timeout_seconds=7200.0), stacks=3)
     
     def notify(self, vt_symbol: str) -> None:
@@ -1053,7 +1053,6 @@ class Combined(StrategyTemplate):
                         feishu_message_template(context)
                     )
                     self.contract_send_count[vt_symbol] = 1
-                    asyncio.run(self.send_feishu_async(context))
             except Exception:
                 self.write_log(f"发送风控平仓待报入时遇到错误 ({vt_symbol}) {traceback.format_exc()}")
 
