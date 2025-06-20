@@ -131,7 +131,7 @@ class AvTempFix1:  # FIXME 更好的类命名
         # 用于限制一个合约在5分钟内最多发送1次提醒
         self.cooldown_map: CooldownMap[str] = CooldownMap[str](base=Cooldown(timeout_seconds=300.0))
         # 用于限制一个合约在1小时内最多发送3次提醒
-        self.stackable_cooldown_map: StackableCooldownMap[str] = StackableCooldownMap[str](base=Cooldown(timeout_seconds=3600.0), stacks=3)
+        self.stackable_cooldown_map: StackableCooldownMap[str] = StackableCooldownMap[str](base=Cooldown(timeout_seconds=7200.0), stacks=3)
     
     def send_feishu_message(self, vt_symbol: str) -> None:
         """
