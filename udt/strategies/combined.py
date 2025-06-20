@@ -535,7 +535,7 @@ class Combined(StrategyTemplate):
         for vt_symbol, vt_positionid in close_positions:
             if vt_symbol in self.option_vt_symbols:
                 symbol_info: ContractData | None = self.main_engine.get_contract(vt_symbol)
-                product = self.convert_symbol_to_canconinal(symbol_info.option_portfolio)  # 品种, 例如 lc2508-C-94000 就是 lc_o
+                product = self.convert_product_to_canconinal(symbol_info.option_portfolio)  # 品种, 例如 lc2508-C-94000 就是 lc_o
                 option_type = symbol_info.option_type.value
                 product_type = product + option_type
                 percent = self.cal_fund_tie(vt_positionid)
@@ -1310,7 +1310,7 @@ class Combined(StrategyTemplate):
         return pd.to_datetime(dt) if dt else pd.NaT
     
     # TODO 需要更好的抽象, 不然将同一个策略用于不同的柜台时, 将不得不复制粘贴几乎全部的代码
-    def convert_symbol_to_canconinal(self, tianfeng_symbol: str) -> str:
+    def convert_product_to_canconinal(self, tianfeng_product: str) -> str:
         """
         将柜台返回的 symbol 转换为标准形式.
         通常需要在外部数据进入到内部逻辑前就进行转换.
@@ -1326,7 +1326,7 @@ class Combined(StrategyTemplate):
         Returns:
             str: 标准形式的 symbol.
         """
-        return self.product_mapping_dict[tianfeng_symbol]
+        return self.product_mapping_dict[tianfeng_product]
     
     # TODO
     def convert_contract_to_df(self, contract: ContractData) -> DataFrame:
