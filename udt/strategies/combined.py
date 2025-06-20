@@ -329,6 +329,7 @@ class Combined(StrategyTemplate):
     # 初始化逻辑 - 开始
     ############################################################
     
+    # TODO 使用 DataFrame.pipe 来提高代码可读性
     def initialize_results(self, exchange_list: list[Exchange]) -> None:
         """ 初始化 results DataFrame"""
         all_contracts = self.main_engine.get_all_contracts()
