@@ -292,7 +292,7 @@ class Combined(StrategyTemplate):
         """计算剩余交易日，筛选剩余交易日最少的两个的合约"""
         
         # 添加列: 剩余交易日
-        self.results['remained_trading'] = self.results['expire_date'].apply(self.calculate_remaining_trading_days)
+        self.results['remaining_trading_days'] = self.results['expire_date'].apply(self.calculate_remaining_trading_days)
         
         # 读取每个品种的固定参数, 详见这里读取的文件
         params: DataFrame = pd.read_excel(get_file_path("params(GXHYTF).xlsx"))
@@ -556,8 +556,8 @@ class Combined(StrategyTemplate):
             if target:
                 target_option = pd.concat(target)
                 target_option = target_option[
-                    (target_option['remained_trading'] >= 1) &
-                    (target_option['remained_trading'] <= 45)
+                    (target_option['remaining_trading_days'] >= 1) &
+                    (target_option['remaining_trading_days'] <= 45)
                 ].reset_index(drop=True)
             else:
                 target_option = DataFrame()
@@ -688,13 +688,13 @@ class Combined(StrategyTemplate):
                 (
                     row["option_lastPrice"] > row["price_tick"] * 4
                     and
-                    row["remained_trading"] <= 14
+                    row["remaining_trading_days"] <= 14
                 )
                 or
                 (
                     row["option_lastPrice"] >= row["price_tick"] * 6
                     and
-                    row["remained_trading"] > 14
+                    row["remaining_trading_days"] > 14
                 )
             )
             and
@@ -704,7 +704,7 @@ class Combined(StrategyTemplate):
             and
             row["option_askPrice1"] - row["option_bidPrice1"] < 3 * row["price_tick"]
             and
-            row["remained_trading"] <= 45
+            row["remaining_trading_days"] <= 45
             and
             (pd.to_datetime(row["date_time"]) - self.current_time).total_seconds() < 20
             and
@@ -791,7 +791,7 @@ class Combined(StrategyTemplate):
 
     @staticmethod
     def check_option_condition(data: dict) -> bool:
-        if data['remained_trading'] <= 5:
+        if data['remaining_trading_days'] <= 5:
             return (data['option_askPrice1'] - data['option_bidPrice1'] < 5 * data['price_tick'] and
                     data['close_signal'] and
                     data['option_volume'] > 15 and 
@@ -886,7 +886,7 @@ class Combined(StrategyTemplate):
         
         # 可平量大于 0 的空头持仓
         closable_positions: list[tuple[str, int]] = [
-            (position.vt_symbol, int(position.volume - position.frozen))
+            (position.vt_symbol, (position.volume - position.frozen))
             for position in total_positions
             if (position.volume - position.frozen) > 0 and position.direction == Direction.SHORT
         ]
@@ -929,23 +929,21 @@ class Combined(StrategyTemplate):
                     ...
                 
                 # 如果满足止盈条件, 则挂止盈平仓单
-                elif 19 < data['remained_trading'] <= 130 and data['close_signal']:
+                elif 19 < data['remaining_trading_days'] <= 130 and data['close_signal']:
                     volume_list = self.split_volume(int(data['max_volume']), close_available_volume)
                     for sub in volume_list:
                         self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick'] * 3}")
                         self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'] * 3, sub, str(self.order_count))
-                elif 11 < data['remained_trading'] <= 19 and data['close_signal']:
+                elif 11 < data['remaining_trading_days'] <= 19 and data['close_signal']:
                     volume_list = self.split_volume(int(data['max_volume']), close_available_volume)
                     for sub in volume_list:
                         self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
                         self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'], sub, str(self.order_count))
-                        self.write_log(f"止盈请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
-                elif 6 < data['remained_trading'] <= 11 and data['close_signal']:
+                elif 6 < data['remaining_trading_days'] <= 11 and data['close_signal']:
                     volume_list = self.split_volume(int(data['max_volume']), close_available_volume)
                     for sub in volume_list:
                         self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
                         self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'], sub, str(self.order_count))
-                        self.write_log(f"止盈请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
             except Exception:
                 self.write_log(f"平仓时遇到错误 ({vt_symbol})")
 
