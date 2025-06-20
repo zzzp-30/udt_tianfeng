@@ -202,7 +202,7 @@ class Combined(StrategyTemplate):
         self.order_info: DataFrame = DataFrame(columns=list(self.order_info_cols.keys())).astype(self.order_info_cols)
         
         # 当前时间
-        self.current_time: datetime = datetime.now()  # FIXME 支持 datetime.now().replace(tzinfo=CHINA_TZ)
+        self.current_time: datetime = datetime.now(tz=CHINA_TZ)
         # 订阅的总合约数
         self.total_instruments_num: int = 0
         # FIXME 不清楚这是做什么的
@@ -757,9 +757,11 @@ class Combined(StrategyTemplate):
 
     @staticmethod
     def is_trading_time() -> bool:
-        current_time = datetime.now().time()
-        return (datetime_time(9, 10) <= current_time <= datetime_time(14, 57) or
-                datetime_time(21, 10) <= current_time <= datetime_time(23, 55))
+        current_time = datetime.now(tz=CHINA_TZ).time()
+        return (
+            datetime_time(9, 10) <= current_time <= datetime_time(14, 57) or
+            datetime_time(21, 10) <= current_time <= datetime_time(23, 55)
+        )
 
     @staticmethod
     def check_future_condition(data: dict, option_type: OptionType) -> bool:
