@@ -17,11 +17,11 @@ from vnpy.trader.constant import (Direction, Exchange, Offset, OptionType,
                                   OrderType, Product, Status)
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.object import (CancelRequest, ContractData, OrderData,
-                               PositionData, TickData, TradeData)
+                                PositionData, TickData, TradeData)
 from vnpy.trader.utility import get_file_path
-from vnpy.utility.cooldown import Cooldown
+from vnpy.utility.cooldown import (Cooldown, CooldownMap, StackableCooldown,
+                                   StackableCooldownMap)
 from vnpy_simplestrategy import StrategyEngine, StrategyTemplate
-
 
 CHINA_TZ: ZoneInfo = ZoneInfo("Asia/Shanghai")
 
@@ -114,6 +114,42 @@ class Op1:  # FIXME 更好的类命名
         # 操作完成, 重置状态
         self.params_map.pop(ordersysid)
 
+
+class AvTempFix1:  # FIXME 更好的类命名
+    """
+    该类型封装了一个“飞书提醒AV走势平仓错误”的逻辑.
+    
+    之所以写成一个类, 也是为了使代码模块化, 提高代码的可维护性.
+    该类是一个临时的措施!!! 该类并没有修复AV走势平仓错误, 仅提醒人工介入.
+    等待AV走势平仓错误修复后 (需要重写), 这个类以及相关调用就可以直接删掉了.
+    """
+    
+    def __init__(self, strategy: "Combined") -> None:
+        self.strategy: Combined = strategy
+        # 用于限制一个合约在5分钟内最多发送1次提醒
+        self.cooldown_map: CooldownMap[str] = CooldownMap[str](base=Cooldown(timeout_seconds=300.0))
+        # 用于限制一个合约在1小时内最多发送3次提醒
+        self.stackable_cooldown_map: StackableCooldownMap[str] = StackableCooldownMap[str](base=Cooldown(timeout_seconds=3600.0), stacks=3)
+    
+    def send_feishu_message(self, vt_symbol: str) -> None:
+        """
+        发送飞书消息, 告知出现了AV走势平仓错误.
+        
+        Args:
+            vt_symbol (str): 无法平仓的合约代码 (vt_symbol)
+        """
+        # 邹老师: 单个合约每天最多发3次飞书提醒
+        # 邹老师: 有些持仓是组合, 但AV走势平仓的逻辑没有考虑到这些, 理想情况不应该考虑为"AV走势平仓错误"
+        if (
+            self.cooldown_map.test(vt_symbol) and
+            self.stackable_cooldown_map.test(vt_symbol)
+        ):
+            context: str = (
+                f'账户：谦量天风\n'
+                f'合约：{vt_symbol}\n'
+                f'AV走势平仓错误\n'
+            )
+            asyncio.run(self.strategy.send_feishu_async(context))
 
 class Combined(StrategyTemplate):
     """
@@ -214,6 +250,8 @@ class Combined(StrategyTemplate):
         self.close_positon_cooldown: Cooldown = Cooldown(timeout_seconds=5.0)
         # Op1 实例, 用于执行 Op1 操作, 关于什么是 Op1 操作详见 class Op1 的 docstring
         self.op1: Op1 = Op1(self)
+        # AvTempFix1 实例, 用于处理 AV 走势平仓错误的临时解决方案  # FIXME 临时措施. 在修复 AV 走势平仓错误后应该将其移除
+        self.av_temp_fix_1: AvTempFix1 = AvTempFix1(self)
 
     def on_init(self) -> None:
         """策略初始化"""
@@ -1127,7 +1165,11 @@ class Combined(StrategyTemplate):
                         )
                         
                         self.op1.try_cancel_order(params)
-            except Exception:
+            except Exception as e:
+                # 发送飞书消息  # FIXME 临时措施. 等AV走势平仓错误修复后应该移除
+                self.av_temp_fix_1.send_feishu_message(vt_symbol)
+                
+                # 写入日志文件
                 self.write_log(f"AV走势特别平仓遇到错误 ({vt_symbol}) {traceback.format_exc()}")
              
     def on_order(self, order: OrderData) -> None:
