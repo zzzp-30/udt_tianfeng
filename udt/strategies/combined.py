@@ -274,10 +274,19 @@ class Combined(StrategyTemplate):
                 self.results = pd.concat([self.results, DataFrame(contracts_data)], ignore_index=True)
         self.process_results()
 
-    def calculate_remaining_trading_days(self, end_date: datetime) -> int:
-        """计算剩余交易日"""
-        return sum(1 for day in range((end_date - self.current_time).days + 1)
-                   if (self.current_time + timedelta(day)).weekday() < 5)
+    @staticmethod
+    def calculate_remaining_trading_days(expire_date: datetime) -> int:
+        """计算剩余交易日(自然日)"""
+        current_time: datetime = datetime.now(tz=CHINA_TZ)
+        business_days: DatetimeIndex = pd.bdate_range(
+            start=current_time.date(),
+            end=expire_date.date(),
+            freq='B',  # 'B' 表示工作日频率
+            tz='Asia/Shanghai',
+            inclusive='right'  # 不包含开始日期, 仅包含结束日期, 即 (current_date. end_date]
+        )
+        
+        return len(business_days)
 
     def process_results(self) -> None:
         """计算剩余交易日，筛选剩余交易日最少的两个的合约"""
