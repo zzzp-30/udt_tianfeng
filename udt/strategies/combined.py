@@ -1096,11 +1096,18 @@ class Combined(StrategyTemplate):
             try:
                 data = results_dict[vt_symbol]
                 option_type = data['option_type']
-                volume: int
+                
+                volume: int | None = None
                 for position in self.main_engine.get_all_positions():
                     if position.vt_symbol == vt_symbol and position.direction == Direction.SHORT:
                         volume = int(position.volume)
-                if self.AV_future_condition(data, option_type):
+                        # FIXME 这里 break 只是临时解决方案，不然一直报错
+                        # AV 走势不仅要检查持仓，还应该检查当前挂单
+                        # 也就是说应该要先尝试撤单
+                        # 撤单成功了，再挂新的单
+                        break
+                
+                if volume is not None and self.AV_future_condition(data, option_type):
                     combined_volume: int = round((1 - self.combined_volumes(data['vt_symbol'], Direction.LONG) / self.combined_volumes(data['vt_symbol'], Direction.SHORT)) * volume)
                     volume_list: list[int] = self.split_volume(int(data['max_volume']), combined_volume)
                     self.order_info.loc[self.order_info['ordersysid'] == ordersysid, 'status'] = Status.CANCELLED  # FIXME 虽然严格来说订单状态要等交易所回报才能更新, 但这里假设已经撤单否则回报好像会重复提醒飞书风控
