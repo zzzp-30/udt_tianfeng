@@ -479,8 +479,9 @@ class Combined(StrategyTemplate):
             self.update_option_data(vt_symbol, tick)
         elif vt_symbol in self.future_vt_symbols:
             self.update_future_data(vt_symbol, tick)
-        # else:
-        #     return
+        else:
+            self.write_log(f"未订阅的合约 {vt_symbol}")
+            return
 
         self.updated_count += 1
         if self.updated_count == self.total_instruments_num:
