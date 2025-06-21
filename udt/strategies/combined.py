@@ -222,17 +222,36 @@ class Combined(StrategyTemplate):
         self.product_mapping_dict: dict[str, str] = {}
         # 每个合约的参数和状态, 包括期权和期货
         self.results_cols: dict[str, str] = {
-            'product': 'string',
-            'exchange': 'object',  # enum: Exchange
             'symbol': 'string',
-            'vt_symbol': 'string',
+            'exchange': 'object',  # enum: Exchange
+            'product': 'string',
             'price_tick': 'float64',
             'expire_date': 'datetime64[ns, Asia/Shanghai]',
             'strike_price': 'float64',
             'underlying_symbol': 'string',
-            'underlying_vt_symbol': 'string',
             'option_type': 'object',  # enum: OptionType
-            # TODO 将所有可能的列在这里定义好, 以提高代码可读性
+            'vt_symbol': 'string',
+            'vt_underlying_symbol': 'string',
+            
+            'remaining_trading_days': 'int64',
+            
+            'by_high': 'float64',  # Before-Yesterday 最高价
+            'by_low': 'float64',  # Before-Yesterday 最低价
+            'y_high': 'float64',  # Yesterday 最高价
+            'y_low': 'float64',  # Yesterday 最低价
+            
+            '期货': 'string',
+            'product_name': 'string',
+            '可挂单': 'string',
+            '交易时间段1': 'string',
+            '交易时间段2': 'string',
+            '交易时间段3': 'string',
+            '交易时间段4': 'string',
+            'max_volume': 'float64',
+            'vix': 'float64',
+            'buyer': 'float64',
+            
+            'product_type': 'string',  # 形如: MA看涨期权, ao看跌期权
         }
         self.results: DataFrame = DataFrame(columns=list(self.results_cols.keys())).astype(self.results_cols)
         
@@ -332,24 +351,34 @@ class Combined(StrategyTemplate):
     # TODO 使用 DataFrame.pipe 来提高代码可读性
     def initialize_results(self, exchange_list: list[Exchange]) -> None:
         """ 初始化 results DataFrame"""
-        all_contracts = self.main_engine.get_all_contracts()
-        for contract_info in all_contracts:
-            # TODO 添加函数 convert_contract_data_to_df, 在这里就把格式转换为统一的
-            if contract_info.product == Product.OPTION and contract_info.exchange in exchange_list:
-                contracts_data = []
-                contracts_data.append({
-                    'product': contract_info.option_portfolio, # 品种，注意与 contract_info.product 区别，后者是金融产品种类
-                    'exchange': contract_info.exchange,
-                    'symbol': contract_info.symbol,
-                    'vt_symbol': contract_info.vt_symbol,
-                    'price_tick': contract_info.pricetick,
-                    'expire_date': contract_info.option_expiry,
-                    'strike_price': contract_info.option_strike,
-                    'underlying_symbol': contract_info.option_underlying,
-                    'underlying_vt_symbol': contract_info.option_underlying + "." + contract_info.exchange.value,
-                    'option_type': contract_info.option_type
+        # 获取底层接口已知的所有合约
+        all_contracts: list[ContractData] = self.main_engine.get_all_contracts()
+        # 字典形式的合约数据, 用于构建初始的 DataFrame
+        all_contract_dict_list: list[dict[str, object]] = list()
+        # 收集所有期权合约(字典形式)
+        for contract in all_contracts:
+            if (
+                contract.product == Product.OPTION and
+                contract.exchange in exchange_list
+            ):
+                all_contract_dict_list.append({
+                    # 原生字段
+                    'symbol': contract.symbol,
+                    'exchange': contract.exchange,
+                    'product': contract.option_portfolio, # 品种(e.g. lc, sc)，注意与 ContractData#product 区别，后者是金融产品种类
+                    'price_tick': contract.pricetick,
+                    'expire_date': contract.option_expiry,
+                    'strike_price': contract.option_strike,
+                    'underlying_symbol': contract.option_underlying,
+                    'option_type': contract.option_type,
+                    
+                    # 衍生字段
+                    'vt_symbol': contract.vt_symbol,
+                    'vt_underlying_symbol': contract.option_underlying + "." + contract.exchange.value,
                 })
-                self.results = pd.concat([self.results, DataFrame(contracts_data)], ignore_index=True)
+        # 把收集到的期权合约拼接到 self.results
+        self.results = pd.concat([self.results, DataFrame(data=all_contract_dict_list)]).astype(self.results_cols)
+        # 接着处理 self.results
         self.process_results()
 
     @staticmethod
@@ -449,7 +478,7 @@ class Combined(StrategyTemplate):
     def subscribe_vt_symbols(self) -> None:
         """订阅合约"""
         option_vt_symbols = self.results['vt_symbol'].unique().tolist()
-        future_vt_symbols = self.results['underlying_vt_symbol'].unique().tolist()
+        future_vt_symbols = self.results['vt_underlying_symbol'].unique().tolist()
         
         self.future_vt_symbols = set(future_vt_symbols)
         self.option_vt_symbols = set(option_vt_symbols)
@@ -551,7 +580,7 @@ class Combined(StrategyTemplate):
             for vt_symbol, data in self.option_update.items():
                 self.results.loc[self.results['vt_symbol'] == vt_symbol, list(data.keys())] = list(data.values())
             for vt_symbol, data in self.future_update.items():
-                self.results.loc[self.results['underlying_vt_symbol'] == vt_symbol, list(data.keys())] = list(data.values())
+                self.results.loc[self.results['vt_underlying_symbol'] == vt_symbol, list(data.keys())] = list(data.values())
 
             self.product_fund_tie()
             self.process_results_by_product()
@@ -620,11 +649,11 @@ class Combined(StrategyTemplate):
                 lambda x: x['strike_price'] - (x['future_upperLimit'] if x['option_type'] == OptionType.CALL else x['future_lowerLimit']),
                 axis=1
             )
-            processed_results['target_option_rank'] = processed_results.groupby(['option_type', 'underlying_vt_symbol'], sort=False)['diff1'].rank()
+            processed_results['target_option_rank'] = processed_results.groupby(['option_type', 'vt_underlying_symbol'], sort=False)['diff1'].rank()
             results_dict = {row['vt_symbol']: row.to_dict() for _, row in processed_results.iterrows()}
 
             target = []
-            for (option_type, _), group in processed_results.groupby(['option_type', 'underlying_vt_symbol'], sort=False):
+            for (option_type, _), group in processed_results.groupby(['option_type', 'vt_underlying_symbol'], sort=False):
                 if option_type == OptionType.CALL:
                     # 将涨停板外满足卖一价大于3个最小变动价的第一个最靠近实值的期权作为目标
                     condition = (group['diff1'] > 0) & (group['option_bidPrice1'] > 3 * group['price_tick'])
@@ -743,7 +772,7 @@ class Combined(StrategyTemplate):
 
     def open_condition(self, row: pd.Series, product_type: str) -> bool:
         """开仓条件判断"""
-        coefficient = row['vix']
+        coefficient = row['vix']  # vix 越低对浮动要求越低, 也就越容易开仓, 反之亦然
         return (
             (
                 (
@@ -1330,20 +1359,13 @@ class Combined(StrategyTemplate):
         """
         return self.product_mapping_dict[tianfeng_product]
     
-    # TODO
-    def convert_contract_to_df(self, contract: ContractData) -> DataFrame:
-        """
-        将 ContractData 转换为一个 DataFrame.
-        """
-        return DataFrame(
-        )
-    
     def convert_order_to_df(self, order: OrderData) -> DataFrame:
         """
         将 OrderData 转换为一个 DataFrame.
         """
         return DataFrame(
             data={
+                # 原生字段
                 "symbol": order.symbol,
                 "exchange": order.exchange,
                 "orderid": order.orderid,
@@ -1359,6 +1381,8 @@ class Combined(StrategyTemplate):
                 "canceltime": self.convert_to_timestamp_or_nat(order.canceltime),
                 "memo": order.memo,
                 "gateway": order.gateway_name,
+                
+                # 衍生字段
                 "vt_symbol": order.vt_symbol,
                 "vt_orderid": order.vt_orderid,
             },
