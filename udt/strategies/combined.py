@@ -1,14 +1,14 @@
 import re
-import time
 import traceback
 from dataclasses import dataclass
-from datetime import datetime
-from datetime import time as datetime_time
+from datetime import datetime, time
+from time import sleep
 from zoneinfo import ZoneInfo
 
 import akshare as ak  # 从akshare数据库中获取期货历史数据
 import pandas as pd
-from pandas import DataFrame, DatetimeIndex, Series
+from line_profiler import profile
+from pandas import DataFrame, DatetimeIndex, Series, Timedelta, Timestamp
 
 from vnpy.trader.constant import (Direction, Exchange, Offset, OptionType,
                                   OrderType, Product, Status)
@@ -177,6 +177,7 @@ class Combined(StrategyTemplate):
     
     author = "Minghao Guan & Zheyin Zeng"
     
+    @profile
     def __init__(
         self,
         strategy_engine: StrategyEngine,
@@ -307,6 +308,7 @@ class Combined(StrategyTemplate):
         # AvTempFix1 实例, 用于处理 AV 走势平仓错误的临时解决方案  # FIXME 临时措施. 在修复 AV 走势平仓错误后应该将其移除
         self.av_temp_fix_1: AvTempFix1 = AvTempFix1(self)
 
+    @profile
     def on_init(self) -> None:
         """策略初始化"""
         
@@ -349,6 +351,7 @@ class Combined(StrategyTemplate):
     ############################################################
     
     # TODO 使用 DataFrame.pipe 来提高代码可读性
+    @profile
     def initialize_results(self, exchange_list: list[Exchange]) -> None:
         """ 初始化 results DataFrame"""
         # 获取底层接口已知的所有合约
@@ -395,6 +398,7 @@ class Combined(StrategyTemplate):
         
         return len(business_days)
 
+    @profile
     def process_results(self) -> None:
         """计算剩余交易日，筛选剩余交易日最少的两个的合约"""
         
@@ -424,6 +428,7 @@ class Combined(StrategyTemplate):
         # 添加历史数据到 self.results
         self.add_historical_data()
 
+    @profile
     def add_historical_data(self) -> None:
         """添加历史数据"""
 
@@ -475,6 +480,7 @@ class Combined(StrategyTemplate):
         self.results = pd.merge(self.results, combined_by_data, on='underlying_symbol', how='left')
         self.results = pd.merge(self.results, combined_y_data, on='underlying_symbol', how='left')
 
+    @profile
     def subscribe_vt_symbols(self) -> None:
         """订阅合约"""
         option_vt_symbols = self.results['vt_symbol'].unique().tolist()
@@ -731,7 +737,7 @@ class Combined(StrategyTemplate):
                     self.cancel_order_by_sysid(ordersysid)
                     conflict_found = True
             if conflict_found:
-                time.sleep(0.5)
+                sleep(0.5)  # FIXME 这会阻塞 run 线程
         except Exception:
             self.write_log(f"避免自成交请求撤单时遇到错误 ({vt_symbol}) {traceback.format_exc()}")
             return False  # 出现异常时默认禁止下单
@@ -879,8 +885,8 @@ class Combined(StrategyTemplate):
     def is_trading_time() -> bool:
         current_time = datetime.now(tz=CHINA_TZ).time()
         return (
-            datetime_time(9, 10) <= current_time <= datetime_time(14, 57) or
-            datetime_time(21, 10) <= current_time <= datetime_time(23, 55)
+            time(9, 10) <= current_time <= time(14, 57) or
+            time(21, 10) <= current_time <= time(23, 55)
         )
 
     @staticmethod
