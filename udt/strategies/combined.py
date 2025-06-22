@@ -413,6 +413,7 @@ class Combined(StrategyTemplate):
         # 添加列: 剩余交易日
         self.results['remaining_trading_days'] = self.results['expire_date'].apply(self.calculate_remaining_trading_days)
         
+        # FIXME 新品种需要手动加入到这个表格. 如果新品种不存在于这个表格, 则新品种将缺失对应的交易时间等固定参数
         # 读取每个品种的固定参数, 详见这里读取的文件
         params: DataFrame = pd.read_excel(get_file_path("params(GXHYTF).xlsx"))
         
