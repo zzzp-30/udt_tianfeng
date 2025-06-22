@@ -234,13 +234,16 @@ class Combined(StrategyTemplate):
             'vt_symbol': 'string',
             'vt_underlying_symbol': 'string',
             
+            # 计算得到的剩余交易日
             'remaining_trading_days': 'int64',
             
+            # 从历史行情获取的价格信息
             'by_high': 'float64',  # Before-Yesterday 最高价
             'by_low': 'float64',  # Before-Yesterday 最低价
             'y_high': 'float64',  # Yesterday 最高价
             'y_low': 'float64',  # Yesterday 最低价
             
+            # 从表格读取到的固定参数
             '期货': 'string',
             'product_name': 'string',
             '可挂单': 'string',
@@ -252,9 +255,10 @@ class Combined(StrategyTemplate):
             'vix': 'float64',
             'buyer': 'float64',
             
+            # 用于计算品种资金占用的字段
             'product_type': 'string',  # 形如: MA看涨期权, ao看跌期权
         }
-        self.results: DataFrame = DataFrame(columns=list(self.results_cols.keys())).astype(self.results_cols)
+        self.results: DataFrame = DataFrame()
         
         # 积累的行情数据
         self.option_update: dict[str, dict[str, float | datetime]] = {}  # vt_symbol: 关注的期权 tick 数据
@@ -337,14 +341,17 @@ class Combined(StrategyTemplate):
         self.order_info = pd.concat([self.order_info, new_order_records], ignore_index=True)
         
         # 初始化 self.results
-        # TODO 考虑将 CFFEX 也纳入到本策略的范围内内
-        self.initialize_results(exchange_list=[Exchange.CZCE, Exchange.DCE, Exchange.SHFE, Exchange.INE, Exchange.GFEX])  # Exchange.DCE, Exchange.SHFE, Exchange.INE, Exchange.GFEX
+        # TODO 将 CFFEX 也纳入到本策略的负责范围内
+        self.initialize_results(exchange_list=[Exchange.CZCE, Exchange.DCE, Exchange.SHFE, Exchange.INE, Exchange.GFEX])
         
         # 订阅行情
         self.subscribe_vt_symbols()
         
         # 构建 product_type 列, 形如: MA看涨期权, ao看跌期权
         self.results['product_type'] = self.results['product'] + self.results['option_type'].apply(lambda x: x.value)
+        
+        # 转换列类型以提高处理速度
+        self.results = self.results.astype(self.results_cols)
     
     ############################################################
     # 初始化逻辑 - 开始
@@ -356,9 +363,9 @@ class Combined(StrategyTemplate):
         """ 初始化 results DataFrame"""
         # 获取底层接口已知的所有合约
         all_contracts: list[ContractData] = self.main_engine.get_all_contracts()
-        # 字典形式的合约数据, 用于构建初始的 DataFrame
+        # 字典形式的 ContractData, 用于构建初始的 DataFrame
         all_contract_dict_list: list[dict[str, object]] = list()
-        # 收集所有期权合约(字典形式)
+        # 收集特定 ContractData 的字典形式的数据
         for contract in all_contracts:
             if (
                 contract.product == Product.OPTION and
@@ -380,7 +387,8 @@ class Combined(StrategyTemplate):
                     'vt_underlying_symbol': contract.option_underlying + "." + contract.exchange.value,
                 })
         # 把收集到的期权合约拼接到 self.results
-        self.results = pd.concat([self.results, DataFrame(data=all_contract_dict_list)]).astype(self.results_cols)
+        self.results = pd.concat([self.results, DataFrame(data=all_contract_dict_list)])
+        self.results['expire_date'] = pd.to_datetime(self.results['expire_date']).dt.tz_localize(tz=CHINA_TZ)
         # 接着处理 self.results
         self.process_results()
 
