@@ -440,52 +440,63 @@ class Combined(StrategyTemplate):
     @profile
     def add_historical_data(self) -> None:
         """添加历史数据"""
-
+        # 从 AkShare 获取所有交易日
         tool_trade_date_hist_sina_df = ak.tool_trade_date_hist_sina()
-        tool_trade_date_hist_sina_df['trade_date'] = pd.to_datetime(tool_trade_date_hist_sina_df['trade_date'])
-        current_time = self.current_time
-        current_date = pd.to_datetime(current_time.strftime("%Y-%m-%d"))
-        # 如果当前时间在 20:00 之后，则算为下一个交易日
-        if current_time.hour >= 20:
-            search_index = tool_trade_date_hist_sina_df.index[tool_trade_date_hist_sina_df['trade_date'] == current_date]
-            trade_date = tool_trade_date_hist_sina_df.loc[search_index[0] + 1, 'trade_date'].strftime("%Y%m%d")
+        tool_trade_date_hist_sina_df['trade_date'] = pd.to_datetime(tool_trade_date_hist_sina_df['trade_date']).dt.tz_localize(tz=CHINA_TZ)
+        
+        # 今天日期
+        now: Timestamp = pd.to_datetime(datetime.now(tz=CHINA_TZ))
+        # 今天交易日
+        td_trade_date: Timestamp
+        # 计算当前交易日
+        # 如果当前时间在 20:00 之后，则算为下一个交易日; 否则就是今天
+        if now.hour >= 20:
+            td_trade_date = now + Timedelta(days=1)
         else:
-            trade_date = pd.to_datetime(current_time.strftime("%Y-%m-%d"))
+            td_trade_date = now
+        # 计算今天之前的两个交易日(不包含今天)
+        trade_date_matches: DataFrame = tool_trade_date_hist_sina_df.copy()
+        # normalize() 作用是将时间戳的时分秒部分归零, 只保留日期部分
+        trade_date_matches = trade_date_matches.loc[trade_date_matches['trade_date'].dt.normalize() < td_trade_date.normalize()]
+        trade_date_matches = trade_date_matches.tail(2).reset_index()
+        # 筛出前交易日 (before-yesterday trade date)
+        byd_trade_date: Timestamp = trade_date_matches.at[0, 'trade_date']
+        # 筛出昨交易日 (yesterday trade date)
+        yd_trade_date: Timestamp = trade_date_matches.at[1, 'trade_date']
+        # 前交易日的数据 (ak.get_futures_daily), 列表里的每个元素是单个交易所的所有数据
+        byd_df_list: list[DataFrame] = []
+        # 昨交易日的数据...
+        yd_df_list: list[DataFrame] = []
+        # 遍历每个交易所
+        for exchange_id in self.results['exchange'].map(lambda x: x.value).unique():
+            # 关注的 ak.get_futures_daily 中的列
+            data_cols: list[str] = ['symbol', 'high', 'low']
+            # 定义好列
+            byd_df: DataFrame = DataFrame(columns=data_cols)
+            yd_df: DataFrame = DataFrame(columns=data_cols)
+            # 尝试从 AkShare 获取期货历史数据
+            try:
+                # AkShare 只接受 str 形式的日期
+                byd_trade_date_str: str = byd_trade_date.strftime("%Y%m%d")
+                yd_trade_date_str: str = yd_trade_date.strftime("%Y%m%d")
+                # 开爬!
+                byd_df = ak.get_futures_daily(start_date=byd_trade_date_str, end_date=byd_trade_date_str, market=exchange_id)
+                yd_df = ak.get_futures_daily(start_date=yd_trade_date_str, end_date=yd_trade_date_str, market=exchange_id)
+            except Exception:
+                self.write_log(f"从 AkShare 获取历史数据失败 ({exchange_id}) {traceback.format_exc()}")
+            # 重命名列以准备合并到 self.results
+            byd_df = byd_df[data_cols].rename(columns={'symbol': 'underlying_symbol', 'high': 'by_high', 'low': 'by_low'})
+            yd_df = yd_df[data_cols].rename(columns={'symbol': 'underlying_symbol', 'high': 'y_high', 'low': 'y_low'})
+            # 特别处理 SHFE, INE, GFEX
+            if exchange_id == (Exchange.SHFE.value or Exchange.INE.value or Exchange.GFEX.value): # TODO
+                byd_df['underlying_symbol'] = byd_df['underlying_symbol'].str.lower()
+                yd_df['underlying_symbol'] = yd_df['underlying_symbol'].str.lower()
+            # 收集数据
+            byd_df_list.append(byd_df)
+            yd_df_list.append(yd_df)
 
-        matching_index = tool_trade_date_hist_sina_df.index[tool_trade_date_hist_sina_df['trade_date'] == trade_date]
-
-        if matching_index.empty:
-            self.write_log("没有可匹配的历史最高最低价数据")
-            return
-
-        previous_dates = tool_trade_date_hist_sina_df.loc[matching_index[0] - 2:matching_index[0] - 1, 'trade_date'].dt.strftime("%Y%m%d").values
-
-        by_data_list = []
-        y_data_list = []
-        for exchange_id in self.results['exchange'].unique():
-            if len(previous_dates) == 2:
-                exchange_id = exchange_id.value
-                by_day, y_day = previous_dates[0], previous_dates[1]
-                
-                try:
-                    # 尝试从 ak 获取期货历史数据
-                    by_data = ak.get_futures_daily(start_date=by_day, end_date=by_day, market=exchange_id)
-                    y_data = ak.get_futures_daily(start_date=y_day, end_date=y_day, market=exchange_id)
-                except Exception:
-                    self.write_log(f"从 AkShare 获取历史数据失败 ({exchange_id}) {traceback.format_exc()}")
-
-                by_data = by_data[['symbol', 'high', 'low']].rename(columns={'symbol': 'underlying_symbol', 'high': 'by_high', 'low': 'by_low'})
-                y_data = y_data[['symbol', 'high', 'low']].rename(columns={'symbol': 'underlying_symbol', 'high': 'y_high', 'low': 'y_low'})
-                if exchange_id == (Exchange.SHFE.value or Exchange.INE.value or Exchange.GFEX.value): # TODO
-                    by_data['underlying_symbol'] = by_data['underlying_symbol'].str.lower()
-                    y_data['underlying_symbol'] = y_data['underlying_symbol'].str.lower()
-                by_data_list.append(by_data)
-                y_data_list.append(y_data)
-            else:
-                self.write_log("无法获取前两个交易日的历史最高最低价数据")
-
-        combined_by_data = pd.concat(by_data_list, ignore_index=True)
-        combined_y_data = pd.concat(y_data_list, ignore_index=True)
+        combined_by_data: DataFrame = pd.concat(byd_df_list, ignore_index=True)
+        combined_y_data: DataFrame = pd.concat(yd_df_list, ignore_index=True)
         self.results = pd.merge(self.results, combined_by_data, on='underlying_symbol', how='left')
         self.results = pd.merge(self.results, combined_y_data, on='underlying_symbol', how='left')
 
