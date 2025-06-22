@@ -11,6 +11,7 @@ requires-python = ">=3.13"
 dependencies = [
     "pip",
     "ipykernel",
+    "line_profiler",
     "pandas-stubs",
     "vnpy",
     "vnpy-akshare",

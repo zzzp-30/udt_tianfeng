@@ -6,6 +6,10 @@ from logging import DEBUG, INFO
 from pathlib import Path
 from time import sleep
 
+from line_profiler import profile
+
+from vnpy.trader.engine import EventEngine, MainEngine, OmsEngine
+from vnpy.trader.object import AccountData, OrderData, PositionData, TradeData
 from vnpy.trader.setting import SETTINGS
 from vnpy.trader.engine import MainEngine, EventEngine, OmsEngine
 from vnpy.trader.object import OrderData, TradeData, PositionData, AccountData
@@ -109,6 +113,7 @@ NIGHT_START = time(20, 45)
 NIGHT_END = time(2, 45)
 
 
+@profile
 def check_trading_period() -> bool:
     """"""
     current_time = datetime.now().time()
@@ -124,7 +129,7 @@ def check_trading_period() -> bool:
     return True  # 适配 7*24
     return trading
 
-
+@profile
 def run_child() -> None:
     """
     Running in the child process.
@@ -213,7 +218,7 @@ def run_child() -> None:
             main_engine.close()  # FIXME no attr: cancel_all
             sys.exit(0)
 
-
+@profile
 def run_parent() -> None:
     """
     Running in the parent process.
