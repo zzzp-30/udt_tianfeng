@@ -44,24 +44,8 @@ feishu_message_template = lambda ctx: {
     }
 }
 
-@dataclass
-class Op1Params:
-    """
-    撤单、然后平仓操作的参数.
-    """
-    
-    # 撤单用的参数
-    ordersysid: str
-    
-    # 平仓用的参数
-    vt_symbol: str  # format: symbol.exchange
-    direction: Direction
-    price: float
-    volume: int
-    memo: str
 
-
-class LoopRiskCtrlOP:  # FIXME 更好的类命名, LoopRiskCtrlOperation
+class LoopRiskCtrlOP:
     """
     循环风控操作.
     
@@ -85,25 +69,49 @@ class LoopRiskCtrlOP:  # FIXME 更好的类命名, LoopRiskCtrlOperation
     调用 self.try_cancel_order 后, 如果策略收到了对应的撤单回报, 将自动发起既定的平仓操作.
     """
     
+    @dataclass
+    class FutureOrder:
+        """
+        代表一个需要在未来发送的订单的参数.
+        """
+        vt_symbol: str
+        direction: Direction
+        price: float
+        volume: int
+        memo: str
+        
     def __init__(self, strategy: "Combined") -> None:
         self.strategy: Combined = strategy
-        self.params_map: dict[str, list[Op1Params]] = dict()  # ordersysid: list[Op1Params]
+        self.future_order_map: dict[str, list[LoopRiskCtrlOP.FutureOrder]] = dict()  # ordersysid: list[Op1Params]
     
-    def try_cancel_order(self, params: Op1Params) -> None:
+    def start(
+        self,
+        ordersysid: str,
+        vt_symbol: str,
+        direction: Direction,
+        price: float,
+        volume: int,
+        memo: str,
+    ) -> None:
         """
         向交易所发送撤单请求.
         
         如果撤单成功, 一个状态为"已撤单"的报单回报会发送到 strategy#on_order 函数.
         在 strategy#on_order 函数内部应该无条件调用 self.try_close_position.
         """
-        
-        self.strategy.write_log(f"[OP1] 发送撤单请求 (vt_symbol={params.vt_symbol}, ordersysid={params.ordersysid}")
-        self.strategy.cancel_order_by_sysid(params.ordersysid)
-        params_list: list[Op1Params] = self.params_map.get(params.ordersysid, [])
-        params_list.append(params)
-        self.params_map[params.ordersysid] = params_list
+        self.strategy.write_log(f"[OP1] 发送撤单请求 (vt_symbol={vt_symbol}, ordersysid={ordersysid}")
+        self.strategy.cancel_order_by_sysid(ordersysid)
+        params_list: list[LoopRiskCtrlOP.FutureOrder] = self.future_order_map.get(ordersysid, [])
+        params_list.append(LoopRiskCtrlOP.FutureOrder(
+            vt_symbol=vt_symbol,
+            direction=direction,
+            price=price,
+            volume=volume,
+            memo=memo
+        ))
+        self.future_order_map[ordersysid] = params_list
     
-    def try_close_position(self, order: OrderData) -> None:
+    def on_order(self, order: OrderData) -> None:
         """
         根据传入的 OrderData 进行平仓操作.
         """
@@ -114,7 +122,7 @@ class LoopRiskCtrlOP:  # FIXME 更好的类命名, LoopRiskCtrlOperation
         ordersysid: str | None = order.ordersysid
         if ordersysid is None or len(ordersysid) == 0:
             return  # 说明该报单是由本策略发出去的, 但还未被交易所接受
-        params_list: list[Op1Params] | None = self.params_map.get(ordersysid, None)
+        params_list: list[LoopRiskCtrlOP.FutureOrder] | None = self.future_order_map.get(ordersysid, None)
         if params_list is None or len(params_list) == 0:
             return  # 说明 ordersysid 对应的报单不由 Op1 处理
 
@@ -130,7 +138,7 @@ class LoopRiskCtrlOP:  # FIXME 更好的类命名, LoopRiskCtrlOperation
             )
             
         # 操作完成, 重置状态
-        self.params_map.pop(ordersysid)
+        self.future_order_map.pop(ordersysid)
 
 
 class AvTrendOP:  # TODO 更好的类命名
@@ -257,6 +265,7 @@ class AvTrendTempFix:  # FIXME 更好的类命名
                 feishu_webhook_url,
                 feishu_message_template(context),
             )
+
 
 class Combined(StrategyTemplate):
     """
@@ -1283,7 +1292,7 @@ class Combined(StrategyTemplate):
                     volume: int = row['volume']
                     memo: str = f"RiskCtrl{str(self.order_count)}"
                     
-                    params: Op1Params = Op1Params(
+                    self.loop_risk_ctrl_op.start(
                         ordersysid=ordersysid,
                         vt_symbol=vt_symbol,
                         direction=direction,
@@ -1291,8 +1300,6 @@ class Combined(StrategyTemplate):
                         volume=volume,
                         memo=memo,
                     )
-                    
-                    self.loop_risk_ctrl_op.try_cancel_order(params)
         except Exception:
             self.write_log(f"循环风控平仓遇到错误 {traceback.format_exc()}")
 
@@ -1390,7 +1397,7 @@ class Combined(StrategyTemplate):
 
         # 响应 OP1
         try:
-            self.loop_risk_ctrl_op.try_close_position(order)
+            self.loop_risk_ctrl_op.on_order(order)
         except Exception:
             self.write_log(f"执行OP1操作时发生错误 {traceback.format_exc()}")
         
