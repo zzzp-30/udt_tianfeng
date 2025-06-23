@@ -178,7 +178,7 @@ class AvTrendOP:  # TODO 更好的类命名
         Args:
             ordersysid (str): 需要撤回的订单号
             vt_symbol (str): 需要平仓的合约代码
-            position_volume (int): 该合约的空头持仓数量
+            short_position_volume (int): 该合约的空头持仓数量
             max_volume (int): 每次平仓的最大数量
             price (float): 平仓价格
             memo (str): Memo
