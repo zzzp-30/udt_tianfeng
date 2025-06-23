@@ -154,7 +154,7 @@ class AvTrendOP:  # TODO 更好的类命名
         代表一个需要在未来发送的订单的参数.
         """
         vt_symbol: str
-        position_volume: int
+        short_position_volume: int
         max_volume: int
         price: float
         memo: str
@@ -167,7 +167,7 @@ class AvTrendOP:  # TODO 更好的类命名
         self,
         ordersysid: str,
         vt_symbol: str,
-        position_volume: int,
+        short_position_volume: int,
         max_volume: int,
         price: float,
         memo: str,
@@ -176,14 +176,19 @@ class AvTrendOP:  # TODO 更好的类命名
         当 AV 走势条件满足时, 开始执行对应的交易逻辑.
         
         Args:
-            ordersysid (str): 止盈单
+            ordersysid (str): 需要撤回的订单号
+            vt_symbol (str): 需要平仓的合约代码
+            position_volume (int): 该合约的空头持仓数量
+            max_volume (int): 每次平仓的最大数量
+            price (float): 平仓价格
+            memo (str): Memo
         """
         self.parent.write_log(f"[AV] 发送撤单请求 (ordersysid={ordersysid}, vt_symbol={vt_symbol})")
         self.parent.cancel_order_by_sysid(ordersysid)
         params_list: list[AvTrendOP.FutureOrder] = self.future_order_map.get(ordersysid, [])
         params_list.append(AvTrendOP.FutureOrder(
             vt_symbol=vt_symbol,
-            position_volume=position_volume,  # 该合约的持仓量
+            short_position_volume=short_position_volume,  # 该合约的持仓量
             max_volume=max_volume,
             price=price,
             memo=memo,
@@ -195,7 +200,7 @@ class AvTrendOP:  # TODO 更好的类命名
         order: OrderData,
     ) -> None:
         """
-        收到报单回报的交易逻辑.
+        收到报单回报的交易逻辑, 即执行之前安排的订单.
         """
         # 检查是否要处理该报单回报
         if order.status != Status.CANCELLED:
@@ -209,7 +214,7 @@ class AvTrendOP:  # TODO 更好的类命名
 
         for params in params_list:
             # 拆单, 发单
-            combined_volume: int = round((1 - self.parent.combined_volumes(params.vt_symbol, Direction.LONG) / self.parent.combined_volumes(params.vt_symbol, Direction.SHORT)) * params.position_volume)
+            combined_volume: int = round((1 - self.parent.combined_volumes(params.vt_symbol, Direction.LONG) / self.parent.combined_volumes(params.vt_symbol, Direction.SHORT)) * params.short_position_volume)
             split_volume_list: list[int] = self.parent.split_volume(params.max_volume, combined_volume)
             for split_volume in split_volume_list:
                 self.parent.write_log(f"[AV] 发送平仓请求 (vt_symbol={params.vt_symbol}, volume={split_volume}, memo={params.memo} @{params.price})")
@@ -1345,27 +1350,27 @@ class Combined(StrategyTemplate):
                 data = results_dict[vt_symbol]
                 option_type = data['option_type']
                 if self.AV_future_condition(data, option_type):
-                    # 找到符合条件的持仓数据
-                    # TODO 简化这块的代码逻辑, 弄个专门的容器来方便查询持仓数据 (参考 PythonGO)
-                    position_volume: int | None = None
+                    # 找到符合条件的空头持仓数量
+                    short_position_volume: int | None = None
                     for position in self.main_engine.get_all_positions():
                         if (
                             position.vt_symbol == vt_symbol and
                             position.direction == Direction.SHORT
                         ):
-                            position_volume = int(position.volume)
+                            short_position_volume = int(position.volume)
                             break
-                    if not position_volume:
+                    if not short_position_volume:
                         self.write_log(f"{vt_symbol} 不存在空头持仓, 无法执行 AV 走势平仓")
                         self.write_log(f"{row}")
                         continue
-                                        
+                    
+                    # 开始执行 AV 走势平仓
                     max_volume: int = data['max_volume']
                     price: float = max(data.get('option_bidPrice1', data['price_tick']), data['price_tick'])
                     self.av_trend_op.start(
                         ordersysid=ordersysid,
                         vt_symbol=vt_symbol,
-                        position_volume=position_volume,
+                        short_position_volume=short_position_volume,
                         max_volume=max_volume,
                         price=price,
                         memo=f'Special{self.order_count}'
@@ -1380,7 +1385,6 @@ class Combined(StrategyTemplate):
     def on_order(self, order: OrderData) -> None:
         """处理订单更新"""
         
-        # TODO 忽略 ordersysid 为 None 或 len(ordersysid) == 0 的订单
         ordersysid: str | None = order.ordersysid
         if not ordersysid:
             # 不存在 ordersysid 则直接忽略该回报
