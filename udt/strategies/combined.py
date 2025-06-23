@@ -61,8 +61,10 @@ class Op1Params:
     memo: str
 
 
-class Op1:  # FIXME 更好的类命名
+class LoopRiskCtrlOP:  # FIXME 更好的类命名, LoopRiskCtrlOperation
     """
+    循环风控操作.
+    
     该类型封装了一个“撤单，再平仓”的操作.
     
     背景:
@@ -131,8 +133,94 @@ class Op1:  # FIXME 更好的类命名
         self.params_map.pop(ordersysid)
 
 
-class AvTempFix1:  # FIXME 更好的类命名
+class AvTrendOP:  # TODO 更好的类命名
     """
+    AV 走势操作.
+    
+    该类型封装了一个AV走势下的交易逻辑.
+    """
+    
+    @dataclass
+    class FutureOrder:
+        """
+        代表一个需要在未来发送的订单的参数.
+        """
+        vt_symbol: str
+        position_volume: int
+        max_volume: int
+        price: float
+        memo: str
+    
+    def __init__(self, strategy: "Combined") -> None:
+        self.parent: Combined = strategy
+        self.future_order_map: dict[str, list[AvTrendOP.FutureOrder]] = dict()  # ordersysid: list[AvOp.Params]
+        
+    def start(
+        self,
+        ordersysid: str,
+        vt_symbol: str,
+        position_volume: int,
+        max_volume: int,
+        price: float,
+        memo: str,
+    ) -> None:
+        """
+        当 AV 走势条件满足时, 开始执行对应的交易逻辑.
+        
+        Args:
+            ordersysid (str): 止盈单
+        """
+        self.parent.write_log(f"[AV] 发送撤单请求 (ordersysid={ordersysid}, vt_symbol={vt_symbol})")
+        self.parent.cancel_order_by_sysid(ordersysid)
+        params_list: list[AvTrendOP.FutureOrder] = self.future_order_map.get(ordersysid, [])
+        params_list.append(AvTrendOP.FutureOrder(
+            vt_symbol=vt_symbol,
+            position_volume=position_volume,  # 该合约的持仓量
+            max_volume=max_volume,
+            price=price,
+            memo=memo,
+        ))
+        self.future_order_map[ordersysid] = params_list
+    
+    def on_order(
+        self,
+        order: OrderData,
+    ) -> None:
+        """
+        收到报单回报的交易逻辑.
+        """
+        # 检查是否要处理该报单回报
+        if order.status != Status.CANCELLED:
+            return  # 忽略该报单不是撤单
+        ordersysid: str | None = order.ordersysid
+        if ordersysid is None or len(ordersysid) == 0:
+            return  # 说明该报单还未被交易所接受
+        params_list: list[AvTrendOP.FutureOrder] | None = self.future_order_map.get(ordersysid, None)
+        if params_list is None or len(params_list) == 0:
+            return  # 说明 ordersysid 对应的报单不由 AvOp 处理
+
+        for params in params_list:
+            # 拆单, 发单
+            combined_volume: int = round((1 - self.parent.combined_volumes(params.vt_symbol, Direction.LONG) / self.parent.combined_volumes(params.vt_symbol, Direction.SHORT)) * params.position_volume)
+            split_volume_list: list[int] = self.parent.split_volume(params.max_volume, combined_volume)
+            for split_volume in split_volume_list:
+                self.parent.write_log(f"[AV] 发送平仓请求 (vt_symbol={params.vt_symbol}, volume={split_volume}, memo={params.memo} @{params.price})")
+                self.parent.request_close_position(
+                    vt_symbol=params.vt_symbol,
+                    direction=Direction.LONG,
+                    price=params.price,
+                    volume=split_volume,
+                    memo=params.memo
+                )
+            
+        # 操作完成, 重置状态
+        self.future_order_map.pop(ordersysid)
+
+
+class AvTrendTempFix:  # FIXME 更好的类命名
+    """
+    AV 走势临时修复.
+    
     该类型封装了一个“飞书提醒AV走势平仓错误”的逻辑.
     
     之所以写成一个类, 也是为了使代码模块化, 提高代码的可维护性.
@@ -308,9 +396,11 @@ class Combined(StrategyTemplate):
         # 平仓操作的冷却
         self.close_positon_cooldown: Cooldown = Cooldown(timeout_seconds=5.0)
         # Op1 实例, 用于执行 Op1 操作, 关于什么是 Op1 操作详见 class Op1 的 docstring
-        self.op1: Op1 = Op1(self)
+        self.loop_risk_ctrl_op: LoopRiskCtrlOP = LoopRiskCtrlOP(self)
+        # AvOp 实例, 用于执行 AV 走势发生时的操作
+        self.av_trend_op: AvTrendOP = AvTrendOP(self)
         # AvTempFix1 实例, 用于处理 AV 走势平仓错误的临时解决方案  # FIXME 临时措施. 在修复 AV 走势平仓错误后应该将其移除
-        self.av_temp_fix_1: AvTempFix1 = AvTempFix1(self)
+        self.av_trend_temp_fix: AvTrendTempFix = AvTrendTempFix(self)
 
     @profile
     def on_init(self) -> None:
@@ -749,7 +839,7 @@ class Combined(StrategyTemplate):
                     row['vt_symbol'] == vt_symbol and
                     (
                         row['price'] >= price
-                        if direction == 'buy'
+                        if direction == Direction.SHORT
                         else row['price'] <= price
                     )
                 ):
@@ -1137,12 +1227,18 @@ class Combined(StrategyTemplate):
         total_positions: list[PositionData] = self.main_engine.get_all_positions()
         
         close_positions: list[tuple[str, float]]
+        
+        # 如果多空都算可平量, 则多头可平量始终为0, 因为多头不会被程序撤单
+        # 如果多空都算持仓量, 则空头的持仓量不变, 就会被程序不断的AV平仓
+        
+        # 如果是多头, 就计算持仓量
         if direction == Direction.LONG:
             close_positions = [
                 (close.vt_symbol, close.volume)
                 for close in total_positions
                 if close.volume > 0 and close.direction == direction
             ]
+        # 如果是空头, 则计算可平量
         else:
             close_positions = [
                 (close.vt_symbol, close.volume - close.frozen)
@@ -1194,7 +1290,7 @@ class Combined(StrategyTemplate):
                         memo=memo,
                     )
                     
-                    self.op1.try_cancel_order(params)
+                    self.loop_risk_ctrl_op.try_cancel_order(params)
         except Exception:
             self.write_log(f"循环风控平仓遇到错误 {traceback.format_exc()}")
 
@@ -1222,12 +1318,14 @@ class Combined(StrategyTemplate):
 
     def close_positions_for_AV(self, results_dict: dict[str, dict]) -> None:
         """AV型走势平仓"""
-        closed_order = self.order_info[(self.order_info['offset'].isin([Offset.CLOSE, Offset.CLOSETODAY, Offset.CLOSEYESTERDAY])) &
+        # 筛选出止盈单 (即 非风控单/非特别单/手动单)
+        matched_order_info: DataFrame = self.order_info[(self.order_info['offset'].isin([Offset.CLOSE, Offset.CLOSETODAY, Offset.CLOSEYESTERDAY])) &
                                        (self.order_info['status'].isin([Status.NOTTRADED])) &
+                                       (self.order_info['direction'] == Direction.LONG) &
                                        (~self.order_info['memo'].str.contains('RiskCtrl')) &
                                        (~self.order_info['memo'].str.contains('Special'))]
 
-        for _, row in closed_order.drop_duplicates().iterrows():
+        for _, row in matched_order_info.drop_duplicates().iterrows():
             vt_symbol: str = row['vt_symbol']
             ordersysid: str = row['ordersysid']
 
@@ -1237,40 +1335,35 @@ class Combined(StrategyTemplate):
             try:
                 data = results_dict[vt_symbol]
                 option_type = data['option_type']
-                
-                volume: int | None = None
-                for position in self.main_engine.get_all_positions():
-                    if position.vt_symbol == vt_symbol and position.direction == Direction.SHORT:
-                        volume = int(position.volume)
-                        # FIXME 这里 break 只是临时解决方案，不然一直报错
-                        # AV 走势不仅要检查持仓，还应该检查当前挂单
-                        # 也就是说应该要先尝试撤单
-                        # 撤单成功了，再挂新的单
-                        break
-                
-                if volume is not None and self.AV_future_condition(data, option_type):
-                    combined_volume: int = round((1 - self.combined_volumes(data['vt_symbol'], Direction.LONG) / self.combined_volumes(data['vt_symbol'], Direction.SHORT)) * volume)
-                    volume_list: list[int] = self.split_volume(int(data['max_volume']), combined_volume)
-                    self.order_info.loc[self.order_info['ordersysid'] == ordersysid, 'status'] = Status.CANCELLED  # FIXME 虽然严格来说订单状态要等交易所回报才能更新, 但这里假设已经撤单否则回报好像会重复提醒飞书风控
-                    for sub in volume_list:
-                        direction: Direction = Direction.LONG
-                        price: float = max(data.get('option_bidPrice1', data['price_tick']), data['price_tick'])
-                        sub_volume: int = sub
-                        memo: str = f'Special{self.order_count}'
-                        
-                        params: Op1Params = Op1Params(
-                            ordersysid=ordersysid,
-                            vt_symbol=vt_symbol,
-                            direction=direction,
-                            price=price,
-                            volume=sub_volume,
-                            memo=memo,
-                        )
-                        
-                        self.op1.try_cancel_order(params)
-            except Exception as e:
+                if self.AV_future_condition(data, option_type):
+                    # 找到符合条件的持仓数据
+                    # TODO 简化这块的代码逻辑, 弄个专门的容器来方便查询持仓数据 (参考 PythonGO)
+                    position_volume: int | None = None
+                    for position in self.main_engine.get_all_positions():
+                        if (
+                            position.vt_symbol == vt_symbol and
+                            position.direction == Direction.SHORT
+                        ):
+                            position_volume = int(position.volume)
+                            break
+                    if not position_volume:
+                        self.write_log(f"{vt_symbol} 不存在空头持仓, 无法执行 AV 走势平仓")
+                        self.write_log(f"{row}")
+                        continue
+                                        
+                    max_volume: int = data['max_volume']
+                    price: float = max(data.get('option_bidPrice1', data['price_tick']), data['price_tick'])
+                    self.av_trend_op.start(
+                        ordersysid=ordersysid,
+                        vt_symbol=vt_symbol,
+                        position_volume=position_volume,
+                        max_volume=max_volume,
+                        price=price,
+                        memo=f'Special{self.order_count}'
+                    )
+            except Exception:
                 # 发送飞书消息  # FIXME 临时措施. 等AV走势平仓错误修复后应该移除
-                self.av_temp_fix_1.notify(vt_symbol)
+                self.av_trend_temp_fix.notify(vt_symbol)
                 
                 # 写入日志文件
                 self.write_log(f"AV走势特别平仓遇到错误 ({vt_symbol}) {traceback.format_exc()}")
@@ -1295,7 +1388,7 @@ class Combined(StrategyTemplate):
 
         # 响应 OP1
         try:
-            self.op1.try_close_position(order)
+            self.loop_risk_ctrl_op.try_close_position(order)
         except Exception:
             self.write_log(f"执行OP1操作时发生错误 {traceback.format_exc()}")
         
