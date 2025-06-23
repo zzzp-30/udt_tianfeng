@@ -11,14 +11,10 @@ from line_profiler import profile
 from vnpy.trader.engine import EventEngine, MainEngine, OmsEngine
 from vnpy.trader.object import AccountData, OrderData, PositionData, TradeData
 from vnpy.trader.setting import SETTINGS
-from vnpy.trader.engine import MainEngine, EventEngine, OmsEngine
-from vnpy.trader.object import OrderData, TradeData, PositionData, AccountData
-# from vnpy_tts import TtsGateway
 from vnpy_ctp import CtpGateway
 # from vnpy_ctptest import CtptestGateway
-from vnpy_simplestrategy import StrategyEngine, SimpleStrategyApp
-from vnpy_ctastrategy import CtaEngine, CtaStrategyApp
-
+from vnpy_simplestrategy import SimpleStrategyApp, StrategyEngine
+# from vnpy_tts import TtsGateway
 
 # SimNow 仿真 (周末/节假日完全无法访问)
 # ctp_setting = {
@@ -113,7 +109,6 @@ NIGHT_START = time(20, 45)
 NIGHT_END = time(2, 45)
 
 
-@profile
 def check_trading_period() -> bool:
     """"""
     current_time = datetime.now().time()
@@ -126,10 +121,9 @@ def check_trading_period() -> bool:
     ):
         trading = True
 
-    return True  # 适配 7*24
+    # return True  # 适配 7*24
     return trading
 
-@profile
 def run_child() -> None:
     """
     Running in the child process.
@@ -145,7 +139,7 @@ def run_child() -> None:
     
     # 使用 TtsGateway
     # main_engine.add_gateway(TtsGateway)
-    # main_gateway: TtsGateway = main_engine.get_gateway("TTS")
+    # main_gateway: TtsGateway = main_engine.get_gateway("TTS") # type: ignore
     
     # 使用 CtpGateway
     main_engine.add_gateway(CtpGateway)
@@ -153,7 +147,7 @@ def run_child() -> None:
     
     # 使用 CtptestGateway
     # main_engine.add_gateway(CtptestGateway)
-    # main_gateway: CtptestGateway = main_engine.get_gateway("CTPTEST")
+    # main_gateway: CtptestGateway = main_engine.get_gateway("CTPTEST") # type: ignore
     
     # --- 登录 CTP ---
     
@@ -218,7 +212,6 @@ def run_child() -> None:
             main_engine.close()  # FIXME no attr: cancel_all
             sys.exit(0)
 
-@profile
 def run_parent() -> None:
     """
     Running in the parent process.
