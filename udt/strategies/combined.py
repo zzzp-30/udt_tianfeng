@@ -260,7 +260,9 @@ class AvTrendTempFix:  # FIXME 更好的类命名
 
 class Combined(StrategyTemplate):
     """
-    所谓的"主策略". TODO 想个更加具体点儿的策略名. "比较级命名"没有比较对象的话信息量太低.
+    所谓的"主策略".
+    
+    TODO 想个更加具体点儿的策略名. "比较级命名"没有比较对象的话信息量太低.
     """
     
     author = "Minghao Guan & Zheyin Zeng"
