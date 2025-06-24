@@ -1,5 +1,6 @@
 import re
 import traceback
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, time
 from time import sleep
@@ -12,6 +13,7 @@ from pandas import DataFrame, DatetimeIndex, Series, Timedelta, Timestamp
 
 from vnpy.trader.constant import (Direction, Exchange, Offset, OptionType,
                                   OrderType, Product, Status)
+from vnpy.trader.converter import OffsetConverter, PositionHolding
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.object import (CancelRequest, ContractData, OrderData,
                                 PositionData, TickData, TradeData)
@@ -154,7 +156,7 @@ class AvTrendOP:  # TODO 更好的类命名
         代表一个需要在未来发送的订单的参数.
         """
         vt_symbol: str
-        short_position_volume: int
+        short_position: int
         max_volume: int
         price: float
         memo: str
@@ -167,7 +169,7 @@ class AvTrendOP:  # TODO 更好的类命名
         self,
         ordersysid: str,
         vt_symbol: str,
-        short_position_volume: int,
+        short_position: int,
         max_volume: int,
         price: float,
         memo: str,
@@ -178,7 +180,7 @@ class AvTrendOP:  # TODO 更好的类命名
         Args:
             ordersysid (str): 需要撤回的订单号
             vt_symbol (str): 需要平仓的合约代码
-            short_position_volume (int): 该合约的空头持仓数量
+            short_position (int): 该合约的空头持仓数量
             max_volume (int): 每次平仓的最大数量
             price (float): 平仓价格
             memo (str): Memo
@@ -188,7 +190,7 @@ class AvTrendOP:  # TODO 更好的类命名
         params_list: list[AvTrendOP.FutureOrder] = self.future_order_map.get(ordersysid, [])
         params_list.append(AvTrendOP.FutureOrder(
             vt_symbol=vt_symbol,
-            short_position_volume=short_position_volume,  # 该合约的持仓量
+            short_position=short_position,  # 该合约的持仓量
             max_volume=max_volume,
             price=price,
             memo=memo,
@@ -211,18 +213,18 @@ class AvTrendOP:  # TODO 更好的类命名
         params_list: list[AvTrendOP.FutureOrder] | None = self.future_order_map.get(ordersysid, None)
         if params_list is None or len(params_list) == 0:
             return  # 说明 ordersysid 对应的报单不由 AvOp 处理
-
+        
         for params in params_list:
             # 拆单, 发单
-            combined_volume: int = round((1 - self.parent.combined_volumes(params.vt_symbol, Direction.LONG) / self.parent.combined_volumes(params.vt_symbol, Direction.SHORT)) * params.short_position_volume)
-            split_volume_list: list[int] = self.parent.split_volume(params.max_volume, combined_volume)
-            for split_volume in split_volume_list:
-                self.parent.write_log(f"[AV] 发送平仓请求 (vt_symbol={params.vt_symbol}, volume={split_volume}, memo={params.memo} @{params.price})")
+            combined_volume: int = round((1 - self.parent.combined_volumes(params.vt_symbol, Direction.LONG) / self.parent.combined_volumes(params.vt_symbol, Direction.SHORT)) * params.short_position)
+            split_volume: list[int] = self.parent.split_volume(params.max_volume, combined_volume)
+            for sub in split_volume:
+                self.parent.write_log(f"[AV] 发送平仓请求 (vt_symbol={params.vt_symbol}, volume={sub}, memo={params.memo} @{params.price})")
                 self.parent.request_close_position(
                     vt_symbol=params.vt_symbol,
                     direction=Direction.LONG,
                     price=params.price,
-                    volume=split_volume,
+                    volume=sub,
                     memo=params.memo
                 )
             
@@ -297,7 +299,7 @@ class Combined(StrategyTemplate):
         super().__init__(
             strategy_engine,
             strategy_name,
-            vt_symbols,  # vt_symbols 会在 on_init 里被重写  # FIXME 更加规范的订阅合约写法
+            vt_symbols,  # vt_symbols 会在 on_init 里被重写  # TODO 更加规范的订阅合约写法
             setting
         )
         
@@ -312,6 +314,9 @@ class Combined(StrategyTemplate):
         self.loop_risk_ctrl_cooldown: int = 40  # 同个报单两个循环风控的最小间隔, 单位: 秒
         
         # --- 策略状态 ---
+        
+        # 整个策略所使用的 gateway_name, 由第一个收到的行情 tick 重新赋值
+        self.gateway_name: str | None = None
         
         # TODO 这两个变量用于在测试时控制开仓数量
         # 对的, 策略已经有"单品种开仓不超过10%可用资金"的限制, 但这个限制主要是用于测试时控制开仓数量.
@@ -365,15 +370,15 @@ class Combined(StrategyTemplate):
         self.results: DataFrame = DataFrame()
         
         # 积累的行情数据
-        self.option_update: dict[str, dict[str, float | datetime]] = {}  # vt_symbol: 关注的期权 tick 数据
-        self.future_update: dict[str, dict[str, float]] = {}  # vt_symbol: 关注的期货 tick 数据
+        self.option_update: dict[str, dict[str, object]] = {}  # vt_symbol: 关注的期权 tick 数据
+        self.future_update: dict[str, dict[str, object]] = {}  # vt_symbol: 关注的期货 tick 数据
         
         # 本策略订阅的合约
         self.option_vt_symbols: set = set()
         self.future_vt_symbols: set = set()
         
         # 每个品种的资金占用比例
-        self.fund_position: dict[str, float] = {}  # 品种: 资金占用比例
+        self.fund_position: dict[str, float] = {}  # 品种: 资金占用比例 (品种是形如 'MA看涨期权' 这样的字符串, 不包含C/P, 也不包含到期日)
         
         # 积累的订单信息
         self.order_info_cols: dict[str, str] = {
@@ -415,7 +420,7 @@ class Combined(StrategyTemplate):
         self.loop_risk_ctrl_op: LoopRiskCtrlOP = LoopRiskCtrlOP(self)
         # AvOp 实例, 用于执行 AV 走势发生时的操作
         self.av_trend_op: AvTrendOP = AvTrendOP(self)
-        # AvTempFix1 实例, 用于处理 AV 走势平仓错误的临时解决方案  # FIXME 临时措施. 在修复 AV 走势平仓错误后应该将其移除
+        # AvTempFix1 实例, 用于处理 AV 走势平仓错误的临时解决方案  # TODO 临时措施. 在修复 AV 走势平仓错误后应该将其移除
         self.av_trend_temp_fix: AvTrendTempFix = AvTrendTempFix(self)
 
     @profile
@@ -441,7 +446,7 @@ class Combined(StrategyTemplate):
                 'type': order.type,
                 'volume': order.volume,
                 'traded': order.traded,
-                'memo': getattr(order, 'memo', '')
+                'memo': getattr(order, 'memo', ''),
             } for order in all_order_data
         ])
         self.order_info = pd.concat([self.order_info, new_order_records], ignore_index=True)
@@ -634,6 +639,10 @@ class Combined(StrategyTemplate):
 
     def on_tick(self, tick: TickData) -> None:
         """处理 tick 数据"""
+        # 将第一个 tick 中的 gateway_name 作为整个策略后续所使用的 gateway_name
+        if not self.gateway_name:
+            self.gateway_name = tick.gateway_name
+            
         vt_symbol = tick.vt_symbol
 
         if vt_symbol in self.option_vt_symbols:
@@ -676,35 +685,49 @@ class Combined(StrategyTemplate):
 
     def cal_fund_tie(self, vt_positionid: str) -> float:
         """计算合约资金占用"""
-        balance = self.main_engine.get_all_accounts()[0].balance
-        short_frozen = self.main_engine.get_position(vt_positionid).frozen
-        percent = short_frozen / balance
-
-        return percent
+        balance = self.main_engine.get_all_accounts()[0].balance  # FIXME 原版这是动态权益
+        position = self.main_engine.get_position(vt_positionid)
+        if not position:
+            return .0
+        else:
+            frozen = position.frozen  # FIXME 原版这是占用保证金. vnpy 的 PositionData#frozen 指的是冻结的持仓量
+            percent = frozen / balance
+            return percent
 
     def product_fund_tie(self) -> None:
-        """品种资金占用"""
+        """计算品种资金占用"""
         total_positions: list[PositionData] = self.main_engine.get_all_positions()
-        close_positions = [
-            (close.vt_symbol, close.vt_positionid)
-            for close in total_positions
-            if close.direction == Direction.SHORT
+        short_positions: list[tuple[str, str]] = [
+            (pos.vt_symbol, pos.vt_positionid)
+            for pos in total_positions
+            if pos.direction == Direction.SHORT
         ]
-        self.fund_position = {product_type: 0.0 for product_type in self.results['product_type'].unique()}
-
-        if not close_positions:
+        if not short_positions:
             return
-
-        for vt_symbol, vt_positionid in close_positions:
-            if vt_symbol in self.option_vt_symbols:
-                symbol_info: ContractData | None = self.main_engine.get_contract(vt_symbol)
-                product = self.convert_product_to_canconinal(symbol_info.option_portfolio)  # 品种, 例如 lc2508-C-94000 就是 lc_o
-                option_type = symbol_info.option_type.value
-                product_type = product + option_type
-                percent = self.cal_fund_tie(vt_positionid)
-                self.fund_position[product_type] += percent
-            else:
+        
+        self.fund_position = {product_type: .0 for product_type in self.results['product_type'].unique()}
+        
+        for (vt_symbol, vt_positionid) in short_positions:
+            if vt_symbol not in self.option_vt_symbols:
                 continue
+            
+            contract: ContractData | None = self.main_engine.get_contract(vt_symbol)
+            if not contract:
+                self.write_log(f"计算品种资金时未找到合约: {vt_symbol}")
+                continue
+            
+            option_portfolio: str | None = contract.option_portfolio
+            if not option_portfolio:
+                raise ValueError(f"合约 {vt_symbol} 的期权品种信息缺失")
+            
+            option_type: OptionType | None = contract.option_type
+            if not option_type:
+                raise ValueError(f"合约 {vt_symbol} 的期权类型信息缺失")
+            
+            product = self.convert_product_to_canconinal(option_portfolio)  # 品种, 例如 lc2508-C-94000 就是 "lc_o"
+            product_type = product + option_type.value  # 品种 + 期权类型, 例如 lc2508-C-94000 就是 "lc_o看跌期权"
+            percent = self.cal_fund_tie(vt_positionid)
+            self.fund_position[product_type] += percent
 
     def process_and_clear_data(self) -> None:
         """处理并清理数据"""
@@ -1050,10 +1073,10 @@ class Combined(StrategyTemplate):
         """
         风控前撤单.
         
-        FIXME 你可能会想, 为什么这个函数的说明里写着 "风控前撤单", 但却不是第一个执行的操作?
-        FIXME 比如撤单后, 等待交易所回报, 确认报单已撤销, 然后再发新的风控平仓单.
-        FIXME 原因是那么那么写有点复杂, 但实际上应该是要这样的.
-        FIXME 等有机会再重构这一块代码吧.
+        你可能会想, 为什么这个函数的说明里写着 "风控前撤单", 但却不是第一个执行的操作?
+        比如撤单后, 等待交易所回报, 确认报单已撤销, 然后再发新的风控平仓单.
+        原因是那么那么写有点复杂, 但实际上应该是要这样的.
+        等有机会再重构这一块代码吧.
         """
         # 目标报单为: 平仓,未成交,非风控(止盈)
         target_orders = self.order_info[
@@ -1126,150 +1149,112 @@ class Combined(StrategyTemplate):
         """
         风控平仓(Risk-Ctrl)和止盈平仓(Take-Profit)
         """
-        total_positions = self.main_engine.get_all_positions()
+        offset_converter: OffsetConverter = self.get_offset_converter()
+        pos_holding_map: dict[str, PositionHolding] = offset_converter.holdings
         
-        # 可平量大于 0 的空头持仓
-        closable_positions: list[tuple[str, int]] = [
-            (position.vt_symbol, int(position.volume - position.frozen))
-            for position in total_positions
-            if (position.volume - position.frozen) > 0 and position.direction == Direction.SHORT
-        ]
-        
-        # 可平量为 0 的空头持仓
-        unclosable_positions: list[tuple[str, int]] = [
-            (position.vt_symbol, 0)  # FIXME 写成元组保持一致性
-            for position in total_positions
-            if position.volume > 0 and (position.volume - position.frozen) == 0 and position.direction == Direction.SHORT
-        ]
-
-        # 对于可平的空头持仓, 如果满足条件则平仓
-        for vt_symbol, close_available_volume in closable_positions:
+        # 遍历每个合约 (vt_symbol) 和对应的持仓信息 (pos_holding)
+        # 注意这个遍历会涉及所有合约 (有持仓的, 无持仓的, 都算在内)
+        for (vt_symbol, pos_holding) in pos_holding_map.items():
+            
+            # FIXME 这个 if 可能发生吗?
             if vt_symbol not in results_dict:
                 continue
-
-            try:
-                data = results_dict[vt_symbol]
-                option_type = data['option_type']
-                
-                # 如果达到风控条件，则挂风控平仓单
-                if (
-                    self.is_trading_time() and
-                    self.check_future_condition(data, option_type) and
-                    self.check_option_condition(data)
-                ):
-                    if self.close_positon_cooldown.test():
-                        combined_volume = round((1 - self.combined_volumes(data['vt_symbol'], Direction.LONG) / self.combined_volumes(data['vt_symbol'], Direction.SHORT)) * close_available_volume)
-                        if combined_volume > 0:
-                            # 获取有效买一价，如果不存在或为0则使用最小价格单位，并确保不低于最小价格单位
-                            bid_price = max(data.get('option_bidPrice1', data['price_tick']), data['price_tick'])
-                            self.avoid_self_dealing(vt_symbol, Direction.LONG, bid_price)
-                            volume_list = self.split_volume(int(data['max_volume']), combined_volume)
-                            for sub in volume_list:
-                                self.write_log(f"风控 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{bid_price}")
-                                self.request_close_position(vt_symbol, Direction.LONG, bid_price, sub, f'RiskCtrl{self.order_count}')
-                
-                # 如果满足AV走势, 则什么也不做
-                elif self.AV_future_condition(data, option_type):
-                    ...
-                
-                # 如果满足止盈条件, 则挂止盈平仓单
-                elif 19 < data['remaining_trading_days'] <= 130 and data['close_signal']:
-                    volume_list = self.split_volume(int(data['max_volume']), close_available_volume)
-                    for sub in volume_list:
-                        self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick'] * 3}")
-                        self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'] * 3, sub, str(self.order_count))
-                elif 11 < data['remaining_trading_days'] <= 19 and data['close_signal']:
-                    volume_list = self.split_volume(int(data['max_volume']), close_available_volume)
-                    for sub in volume_list:
-                        self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
-                        self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'], sub, str(self.order_count))
-                elif 6 < data['remaining_trading_days'] <= 11 and data['close_signal']:
-                    volume_list = self.split_volume(int(data['max_volume']), close_available_volume)
-                    for sub in volume_list:
-                        self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
-                        self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'], sub, str(self.order_count))
-            except Exception:
-                self.write_log(f"平仓时遇到错误 ({vt_symbol})")
-
-        # 对于没有可平量的空头持仓, 发送飞书提醒平仓待报入
-        for vt_symbol, _ in unclosable_positions:
-            if vt_symbol not in results_dict:
+            
+            # 空头持仓量
+            short_pos: int = int(pos_holding.short_pos)
+            
+            # 空头持仓可平量
+            short_pos_available: int = int(pos_holding.short_pos - pos_holding.short_pos_frozen)
+            
+            # 跳过没有空头持仓的合约
+            if short_pos <= 0:
                 continue
-
-            try:
-                data = results_dict[vt_symbol]
-                option_type = data['option_type']
-                product_name = data['期货']
-                if (
-                    self.is_trading_time() and
-                    self.check_future_condition(data, option_type) and
-                    self.contract_send_count.get(vt_symbol, 0) < 1
-                ):
-                    context = (
-                        f"账户：谦量天风\n"
-                        f"合约：{product_name} {vt_symbol}\n"
-                        f"风控平仓待报入"
-                    )
-                    self.write_log(context)
-                    self.main_engine.send_feishu(
-                        feishu_webhook_url,
-                        feishu_message_template(context)
-                    )
-                    self.contract_send_count[vt_symbol] = 1
-            except Exception:
-                self.write_log(f"发送风控平仓待报入时遇到错误 ({vt_symbol}) {traceback.format_exc()}")
-
-    def instrument_info(self, vt_symbol: str) -> dict:
-        """使用正则表达式匹配标的物（字母）、到期日（数字）、方向（'P'或'C'）、价格（数字）"""
-        vt_symbol = vt_symbol.split(".")[0]
-        vt_symbol = vt_symbol.replace('-', '')
-        match = re.match(r"([a-zA-Z]+)(\d+)(P|C)(\d+)$", vt_symbol)
-        if match:
-            underlying = match.group(1)  # 标的物
-            expiry = match.group(2)      # 到期日
-            direction = match.group(3)   # 方向
-            price = match.group(4)       # 价格
-            return {
-                "underlying": underlying,
-                "expiry": expiry,
-                "direction": direction
-            }
-        else:
-            return {}
+            
+            # 如果空头持仓可平量大于 0
+            if short_pos_available > 0:
+                try:
+                    data = results_dict[vt_symbol]
+                    option_type = data['option_type']
+                    
+                    # 如果达到风控条件，则挂风控平仓单
+                    if (
+                        self.is_trading_time() and
+                        self.check_future_condition(data, option_type) and
+                        self.check_option_condition(data)
+                    ):
+                        if self.close_positon_cooldown.test():
+                            combined_volume = round((1 - self.combined_volumes(data['vt_symbol'], Direction.LONG) / self.combined_volumes(data['vt_symbol'], Direction.SHORT)) * short_pos_available)
+                            if combined_volume > 0:
+                                # 获取有效买一价，如果不存在或为0则使用最小价格单位，并确保不低于最小价格单位
+                                bid_price = max(data.get('option_bidPrice1', data['price_tick']), data['price_tick'])
+                                self.avoid_self_dealing(vt_symbol, Direction.LONG, bid_price)
+                                volume_list = self.split_volume(int(data['max_volume']), combined_volume)
+                                for sub in volume_list:
+                                    self.write_log(f"风控 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{bid_price}")
+                                    self.request_close_position(vt_symbol, Direction.LONG, bid_price, sub, f'RiskCtrl{self.order_count}')
+                    
+                    # 如果满足AV走势, 则什么也不做
+                    elif self.AV_future_condition(data, option_type):
+                        ...
+                    
+                    # 如果满足止盈条件, 则挂止盈平仓单
+                    elif 19 < data['remaining_trading_days'] <= 130 and data['close_signal']:
+                        volume_list = self.split_volume(int(data['max_volume']), short_pos_available)
+                        for sub in volume_list:
+                            self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick'] * 3}")
+                            self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'] * 3, sub, str(self.order_count))
+                    elif 11 < data['remaining_trading_days'] <= 19 and data['close_signal']:
+                        volume_list = self.split_volume(int(data['max_volume']), short_pos_available)
+                        for sub in volume_list:
+                            self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
+                            self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'], sub, str(self.order_count))
+                    elif 6 < data['remaining_trading_days'] <= 11 and data['close_signal']:
+                        volume_list = self.split_volume(int(data['max_volume']), short_pos_available)
+                        for sub in volume_list:
+                            self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
+                            self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'], sub, str(self.order_count))
+                except Exception:
+                    self.write_log(f"平仓时遇到错误 ({vt_symbol})")
+            
+            # 如果空头持仓可平量小于等于 0
+            else:
+                try:
+                    data = results_dict[vt_symbol]
+                    option_type = data['option_type']
+                    product_name = data['期货']
+                    if (
+                        self.is_trading_time() and
+                        self.check_future_condition(data, option_type) and
+                        self.contract_send_count.get(vt_symbol, 0) < 1
+                    ):
+                        context = (
+                            f"账户：谦量天风\n"
+                            f"合约：{product_name} {vt_symbol}\n"
+                            f"风控平仓待报入"
+                        )
+                        self.write_log(context)
+                        self.main_engine.send_feishu(
+                            feishu_webhook_url,
+                            feishu_message_template(context)
+                        )
+                        self.contract_send_count[vt_symbol] = 1
+                except Exception:
+                    self.write_log(f"发送风控平仓待报入时遇到错误 ({vt_symbol}) {traceback.format_exc()}")
         
     def combined_volumes(self, vt_symbol: str, direction: Direction) -> float:
         """匹配相同标的，到期日，方向的合约数量"""
-
-        total_positions: list[PositionData] = self.main_engine.get_all_positions()
-        
-        close_positions: list[tuple[str, float]]
-        
+        pos_holding: PositionHolding = self.get_position_holding(vt_symbol)
+        # 为什么多头算持仓量, 而空头算可平量?
         # 如果多空都算可平量, 则多头可平量始终为0, 因为多头不会被程序撤单
         # 如果多空都算持仓量, 则空头的持仓量不变, 就会被程序不断的AV平仓
-        
-        # 如果是多头, 就计算持仓量
-        if direction == Direction.LONG:
-            close_positions = [
-                (close.vt_symbol, close.volume)
-                for close in total_positions
-                if close.volume > 0 and close.direction == direction
-            ]
-        # 如果是空头, 则计算可平量
-        else:
-            close_positions = [
-                (close.vt_symbol, close.volume - close.frozen)
-                for close in total_positions
-                if (close.volume - close.frozen) > 0 and close.direction == direction
-            ]
-        
-        volumes: float = 0.0
-        
-        info: dict = self.instrument_info(vt_symbol)
-        for vt_symbol, volume in close_positions:
-            if self.instrument_info(vt_symbol) == info:
-                volumes += volume
-        
-        return volumes
+        match direction:
+            # 如果是多头, 就计算持仓量
+            case Direction.LONG: return pos_holding.long_pos
+            # 如果是空头, 则计算可平量
+            case Direction.SHORT: return pos_holding.short_pos - pos_holding.short_pos_frozen
+            # 如果不是多也不是空, 则抛出异常终止程序
+            case _:
+                raise ValueError(f"Unsupported direction: {direction}")
 
     def close_positions_for_loop_risk_ctrl(self, results_dict: dict[str, dict]) -> None:
         """循环风控"""
@@ -1350,16 +1335,9 @@ class Combined(StrategyTemplate):
                 data = results_dict[vt_symbol]
                 option_type = data['option_type']
                 if self.AV_future_condition(data, option_type):
-                    # 找到符合条件的空头持仓数量
-                    short_position_volume: int | None = None
-                    for position in self.main_engine.get_all_positions():
-                        if (
-                            position.vt_symbol == vt_symbol and
-                            position.direction == Direction.SHORT
-                        ):
-                            short_position_volume = int(position.volume)
-                            break
-                    if not short_position_volume:
+                    pos_holding: PositionHolding = self.get_position_holding(vt_symbol)
+                    short_pos: int = int(pos_holding.short_pos)
+                    if short_pos <= 0:
                         self.write_log(f"{vt_symbol} 不存在空头持仓, 无法执行 AV 走势平仓")
                         self.write_log(f"{row}")
                         continue
@@ -1370,13 +1348,13 @@ class Combined(StrategyTemplate):
                     self.av_trend_op.start(
                         ordersysid=ordersysid,
                         vt_symbol=vt_symbol,
-                        short_position_volume=short_position_volume,
+                        short_position=short_pos,
                         max_volume=max_volume,
                         price=price,
                         memo=f'Special{self.order_count}'
                     )
             except Exception:
-                # 发送飞书消息  # FIXME 临时措施. 等AV走势平仓错误修复后应该移除
+                # 发送飞书消息  # TODO 临时措施. 等AV走势平仓错误修复后应该移除
                 self.av_trend_temp_fix.notify(vt_symbol)
                 
                 # 写入日志文件
@@ -1404,6 +1382,12 @@ class Combined(StrategyTemplate):
             self.loop_risk_ctrl_op.on_order(order)
         except Exception:
             self.write_log(f"执行OP1操作时发生错误 {traceback.format_exc()}")
+        
+        # 响应 AvTrendClosePose
+        try:
+            self.av_trend_op.on_order(order)
+        except Exception:
+            self.write_log(f"执行 AvTrendClosePos 操作时发生错误 {traceback.format_exc()}")
         
         try:
             order_df: DataFrame = self.convert_order_to_df(order)
@@ -1471,7 +1455,25 @@ class Combined(StrategyTemplate):
             pd.Timestamp | pd.NaT: 转换后的时间戳, 如果 dt 为 None 则返回 pd.NaT.
         """
         return pd.to_datetime(dt) if dt else pd.NaT
-    
+            
+    def get_offset_converter(self) -> OffsetConverter:
+        """获取开平转换器"""
+        gateway_name: str | None = self.gateway_name
+        if not gateway_name:
+            raise Exception("Gateway name is not set.")
+        offset_converter: OffsetConverter | None = self.main_engine.get_converter(gateway_name)
+        if not offset_converter:
+            raise Exception("Converter not found for gateway: {gateway_name}")
+        return offset_converter
+
+    def get_position_holding(self, vt_symbol: str) -> PositionHolding:
+        """获取实时持仓信息"""
+        offset_converter: OffsetConverter = self.get_offset_converter()
+        position_holding: PositionHolding | None = offset_converter.get_position_holding(vt_symbol)
+        if not position_holding:
+            raise Exception("PositionHolding not found for vt_symbol: {vt_symbol}")
+        return position_holding
+
     # TODO 需要更好的抽象, 不然将同一个策略用于不同的柜台时, 将不得不复制粘贴几乎全部的代码
     def convert_product_to_canconinal(self, tianfeng_product: str) -> str:
         """
