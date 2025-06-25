@@ -690,8 +690,8 @@ class Combined(StrategyTemplate):
         if not position:
             return .0
         else:
-            frozen = position.frozen  # FIXME 原版这是占用保证金. vnpy 的 PositionData#frozen 指的是冻结的持仓量
-            percent = frozen / balance
+            used_margin = position.used_margin + position.frozen_margin + position.frozen_commission
+            percent = used_margin / balance
             return percent
 
     def product_fund_tie(self) -> None:
