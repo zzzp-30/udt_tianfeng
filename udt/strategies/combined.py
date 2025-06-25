@@ -1411,7 +1411,13 @@ class Combined(StrategyTemplate):
             self.order_info['loop_risk_ctrl_time'] = pd.Series(pd.NaT, dtype='datetime64[ns, Asia/Shanghai]')  # Note: 必须指定 dtype 使 NaT 带上时区
             self.order_info.loc[mask_orders_to_loop_risk_ctrl, 'loop_risk_ctrl_time'] = self.order_info.loc[mask_orders_to_loop_risk_ctrl, 'datetime'] + pd.Timedelta(seconds=self.loop_risk_ctrl_cooldown)
             
-            if 'RiskCtrl' in str(order.memo) and order.status == Status.NOTTRADED:
+            if (
+                order.status == Status.NOTTRADED and
+                (
+                    'RiskCtrl' in order.memo or
+                    'Special' in order.memo
+                )
+            ):
                 product_name: str = self.results.loc[self.results['vt_symbol'] == order.vt_symbol, '期货'].item()
                 context = (
                     f'账户：谦量天风\n'
