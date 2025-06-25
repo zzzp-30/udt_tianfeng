@@ -47,7 +47,7 @@ feishu_message_template = lambda ctx: {
 }
 
 
-class LoopRiskCtrlOP:
+class LoopRiskCtrl:
     """
     循环风控操作.
     
@@ -84,7 +84,7 @@ class LoopRiskCtrlOP:
         
     def __init__(self, strategy: "Combined") -> None:
         self.strategy: Combined = strategy
-        self.future_order_map: dict[str, list[LoopRiskCtrlOP.FutureOrder]] = dict()  # ordersysid: list[Op1Params]
+        self.future_order_map: dict[str, list[LoopRiskCtrl.FutureOrder]] = dict()  # ordersysid: list[Op1Params]
     
     def start(
         self,
@@ -101,10 +101,10 @@ class LoopRiskCtrlOP:
         如果撤单成功, 一个状态为"已撤单"的报单回报会发送到 strategy#on_order 函数.
         在 strategy#on_order 函数内部应该无条件调用 self.try_close_position.
         """
-        self.strategy.write_log(f"[OP1] 发送撤单请求 (vt_symbol={vt_symbol}, ordersysid={ordersysid}")
+        self.strategy.write_log(f"[循环风控] 发送撤单请求 (vt_symbol={vt_symbol}, ordersysid={ordersysid}")
         self.strategy.cancel_order_by_sysid(ordersysid)
-        params_list: list[LoopRiskCtrlOP.FutureOrder] = self.future_order_map.get(ordersysid, [])
-        params_list.append(LoopRiskCtrlOP.FutureOrder(
+        params_list: list[LoopRiskCtrl.FutureOrder] = self.future_order_map.get(ordersysid, [])
+        params_list.append(LoopRiskCtrl.FutureOrder(
             vt_symbol=vt_symbol,
             direction=direction,
             price=price,
@@ -124,13 +124,13 @@ class LoopRiskCtrlOP:
         ordersysid: str | None = order.ordersysid
         if ordersysid is None or len(ordersysid) == 0:
             return  # 说明该报单是由本策略发出去的, 但还未被交易所接受
-        params_list: list[LoopRiskCtrlOP.FutureOrder] | None = self.future_order_map.get(ordersysid, None)
+        params_list: list[LoopRiskCtrl.FutureOrder] | None = self.future_order_map.get(ordersysid, None)
         if params_list is None or len(params_list) == 0:
             return  # 说明 ordersysid 对应的报单不由 Op1 处理
 
         # 所有检查通过, 进行平仓操作
         for params in params_list:
-            self.strategy.write_log(f"[OP1] 发送平仓请求 (vt_symbol={params.vt_symbol}, direction={params.direction}, volume={params.volume}, memo={params.memo} @{params.price})")
+            self.strategy.write_log(f"[循环风控] 发送平仓请求 (vt_symbol={params.vt_symbol}, direction={params.direction}, volume={params.volume}, memo={params.memo} @{params.price})")
             self.strategy.request_close_position(
                 vt_symbol=params.vt_symbol,
                 direction=params.direction,
@@ -143,7 +143,7 @@ class LoopRiskCtrlOP:
         self.future_order_map.pop(ordersysid)
 
 
-class AvTrendOP:  # TODO 更好的类命名
+class AvTrendClosePos:
     """
     AV 走势操作.
     
@@ -163,7 +163,7 @@ class AvTrendOP:  # TODO 更好的类命名
     
     def __init__(self, strategy: "Combined") -> None:
         self.parent: Combined = strategy
-        self.future_order_map: dict[str, list[AvTrendOP.FutureOrder]] = dict()  # ordersysid: list[AvOp.Params]
+        self.future_order_map: dict[str, list[AvTrendClosePos.FutureOrder]] = dict()  # ordersysid: list[AvOp.Params]
         
     def start(
         self,
@@ -185,10 +185,10 @@ class AvTrendOP:  # TODO 更好的类命名
             price (float): 平仓价格
             memo (str): Memo
         """
-        self.parent.write_log(f"[AV] 发送撤单请求 (ordersysid={ordersysid}, vt_symbol={vt_symbol})")
+        self.parent.write_log(f"[AV走势] 发送撤单请求 (ordersysid={ordersysid}, vt_symbol={vt_symbol})")
         self.parent.cancel_order_by_sysid(ordersysid)
-        params_list: list[AvTrendOP.FutureOrder] = self.future_order_map.get(ordersysid, [])
-        params_list.append(AvTrendOP.FutureOrder(
+        params_list: list[AvTrendClosePos.FutureOrder] = self.future_order_map.get(ordersysid, [])
+        params_list.append(AvTrendClosePos.FutureOrder(
             vt_symbol=vt_symbol,
             short_position=short_position,  # 该合约的持仓量
             max_volume=max_volume,
@@ -210,7 +210,7 @@ class AvTrendOP:  # TODO 更好的类命名
         ordersysid: str | None = order.ordersysid
         if ordersysid is None or len(ordersysid) == 0:
             return  # 说明该报单还未被交易所接受
-        params_list: list[AvTrendOP.FutureOrder] | None = self.future_order_map.get(ordersysid, None)
+        params_list: list[AvTrendClosePos.FutureOrder] | None = self.future_order_map.get(ordersysid, None)
         if params_list is None or len(params_list) == 0:
             return  # 说明 ordersysid 对应的报单不由 AvOp 处理
         
@@ -219,7 +219,7 @@ class AvTrendOP:  # TODO 更好的类命名
             combined_volume: int = round((1 - self.parent.combined_volumes(params.vt_symbol, Direction.LONG) / self.parent.combined_volumes(params.vt_symbol, Direction.SHORT)) * params.short_position)
             split_volume: list[int] = self.parent.split_volume(params.max_volume, combined_volume)
             for sub in split_volume:
-                self.parent.write_log(f"[AV] 发送平仓请求 (vt_symbol={params.vt_symbol}, volume={sub}, memo={params.memo} @{params.price})")
+                self.parent.write_log(f"[AV走势] 发送平仓请求 (vt_symbol={params.vt_symbol}, volume={sub}, memo={params.memo} @{params.price})")
                 self.parent.request_close_position(
                     vt_symbol=params.vt_symbol,
                     direction=Direction.LONG,
@@ -416,11 +416,11 @@ class Combined(StrategyTemplate):
         self.open_position_cooldown: Cooldown = Cooldown(timeout_seconds=5.0)
         # 平仓操作的冷却
         self.close_positon_cooldown: Cooldown = Cooldown(timeout_seconds=5.0)
-        # Op1 实例, 用于执行 Op1 操作, 关于什么是 Op1 操作详见 class Op1 的 docstring
-        self.loop_risk_ctrl_op: LoopRiskCtrlOP = LoopRiskCtrlOP(self)
-        # AvOp 实例, 用于执行 AV 走势发生时的操作
-        self.av_trend_op: AvTrendOP = AvTrendOP(self)
-        # AvTempFix1 实例, 用于处理 AV 走势平仓错误的临时解决方案  # TODO 临时措施. 在修复 AV 走势平仓错误后应该将其移除
+        # LoopRiskCtrl 实例, 用于执行循环风控操作
+        self.loop_risk_ctrl: LoopRiskCtrl = LoopRiskCtrl(self)
+        # AvTrendClosePos 实例, 用于执行 AV 走势平仓
+        self.av_trend_close_pos: AvTrendClosePos = AvTrendClosePos(self)
+        # AvTempFix1 实例, 用于 AV 走势平仓错误的临时解决方案  # TODO 临时措施. 在修复 AV 走势平仓错误后应该将其移除
         self.av_trend_temp_fix: AvTrendTempFix = AvTrendTempFix(self)
 
     @profile
@@ -1190,7 +1190,7 @@ class Combined(StrategyTemplate):
                                 self.avoid_self_dealing(vt_symbol, Direction.LONG, bid_price)
                                 volume_list = self.split_volume(int(data['max_volume']), combined_volume)
                                 for sub in volume_list:
-                                    self.write_log(f"风控 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{bid_price}")
+                                    self.write_log(f"[风控] 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{bid_price}")
                                     self.request_close_position(vt_symbol, Direction.LONG, bid_price, sub, f'RiskCtrl{self.order_count}')
                     
                     # 如果满足AV走势, 则什么也不做
@@ -1201,17 +1201,17 @@ class Combined(StrategyTemplate):
                     elif 19 < data['remaining_trading_days'] <= 130 and data['close_signal']:
                         volume_list = self.split_volume(int(data['max_volume']), short_pos_available)
                         for sub in volume_list:
-                            self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick'] * 3}")
+                            self.write_log(f"[止盈] 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick'] * 3}")
                             self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'] * 3, sub, str(self.order_count))
                     elif 11 < data['remaining_trading_days'] <= 19 and data['close_signal']:
                         volume_list = self.split_volume(int(data['max_volume']), short_pos_available)
                         for sub in volume_list:
-                            self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
+                            self.write_log(f"[止盈] 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
                             self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'], sub, str(self.order_count))
                     elif 6 < data['remaining_trading_days'] <= 11 and data['close_signal']:
                         volume_list = self.split_volume(int(data['max_volume']), short_pos_available)
                         for sub in volume_list:
-                            self.write_log(f"止盈 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
+                            self.write_log(f"[止盈] 请求平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{data['price_tick']}")
                             self.request_close_position(vt_symbol, Direction.LONG, data['price_tick'], sub, str(self.order_count))
                 except Exception:
                     self.write_log(f"平仓时遇到错误 ({vt_symbol})")
@@ -1282,7 +1282,7 @@ class Combined(StrategyTemplate):
                     volume: int = row['volume']
                     memo: str = f"RiskCtrl{str(self.order_count)}"
                     
-                    self.loop_risk_ctrl_op.start(
+                    self.loop_risk_ctrl.start(
                         ordersysid=ordersysid,
                         vt_symbol=vt_symbol,
                         direction=direction,
@@ -1345,7 +1345,7 @@ class Combined(StrategyTemplate):
                     # 开始执行 AV 走势平仓
                     max_volume: int = data['max_volume']
                     price: float = max(data.get('option_bidPrice1', data['price_tick']), data['price_tick'])
-                    self.av_trend_op.start(
+                    self.av_trend_close_pos.start(
                         ordersysid=ordersysid,
                         vt_symbol=vt_symbol,
                         short_position=short_pos,
@@ -1377,15 +1377,15 @@ class Combined(StrategyTemplate):
         
         self.write_log(f"订单信息更新 {self.generate_order_info_string_from_order_data(order)}")
 
-        # 响应 OP1
+        # 响应 LoopRiskCtrl
         try:
-            self.loop_risk_ctrl_op.on_order(order)
+            self.loop_risk_ctrl.on_order(order)
         except Exception:
             self.write_log(f"执行OP1操作时发生错误 {traceback.format_exc()}")
         
         # 响应 AvTrendClosePose
         try:
-            self.av_trend_op.on_order(order)
+            self.av_trend_close_pos.on_order(order)
         except Exception:
             self.write_log(f"执行 AvTrendClosePos 操作时发生错误 {traceback.format_exc()}")
         
