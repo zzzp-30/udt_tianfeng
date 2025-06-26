@@ -6,8 +6,6 @@ from logging import DEBUG, INFO
 from pathlib import Path
 from time import sleep
 
-from line_profiler import profile
-
 from vnpy.trader.engine import EventEngine, MainEngine, OmsEngine
 from vnpy.trader.object import AccountData, OrderData, PositionData, TradeData
 from vnpy.trader.setting import SETTINGS
