@@ -1591,8 +1591,6 @@ dependencies = [
     { name = "vnpy-rpcservice" },
     { name = "vnpy-scripttrader" },
     { name = "vnpy-simplestrategy" },
-    { name = "vnpy-sopt" },
-    { name = "vnpy-sopttest" },
     { name = "vnpy-sqlite" },
     { name = "vnpy-tts" },
     { name = "vnpy-tushare" },
@@ -1620,8 +1618,6 @@ requires-dist = [
     { name = "vnpy-rpcservice", directory = "../vnpy_rpcservice" },
     { name = "vnpy-scripttrader", directory = "../vnpy_scripttrader" },
     { name = "vnpy-simplestrategy", directory = "../vnpy_simplestrategy" },
-    { name = "vnpy-sopt", directory = "../vnpy_sopt" },
-    { name = "vnpy-sopttest", directory = "../vnpy_sopttest" },
     { name = "vnpy-sqlite", directory = "../vnpy_sqlite" },
     { name = "vnpy-tts", directory = "../vnpy_tts" },
     { name = "vnpy-tushare", directory = "../vnpy_tushare" },
@@ -1860,28 +1856,6 @@ requires-dist = [
     { name = "plotly" },
     { name = "vnpy", directory = "../vnpy" },
 ]
-
-[[package]]
-name = "vnpy-sopt"
-version = "3.7.1.0"
-source = { directory = "../vnpy_sopt" }
-dependencies = [
-    { name = "vnpy" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "vnpy", specifier = ">=3.0.0" }]
-
-[[package]]
-name = "vnpy-sopttest"
-version = "3.7.0.1"
-source = { directory = "../vnpy_sopttest" }
-dependencies = [
-    { name = "vnpy" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "vnpy", specifier = ">=4.0.0" }]
 
 [[package]]
 name = "vnpy-sqlite"

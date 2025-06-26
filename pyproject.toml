@@ -29,8 +29,8 @@ dependencies = [
     "vnpy-rpcservice",
     "vnpy-scripttrader",
     "vnpy-simplestrategy",
-    "vnpy-sopt",
-    "vnpy-sopttest",
+    # "vnpy-sopt",  # C++ 编译暂时有问题
+    # "vnpy-sopttest",  # 同上
     "vnpy-sqlite",
     "vnpy-tts",
     "vnpy-tushare",
