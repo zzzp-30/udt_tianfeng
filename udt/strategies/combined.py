@@ -17,7 +17,7 @@ from vnpy.trader.converter import OffsetConverter, PositionHolding
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.object import (CancelRequest, ContractData, OrderData,
                                 PositionData, TickData, TradeData)
-from vnpy.trader.utility import get_file_path
+from vnpy.trader.utility import get_file_path, extract_vt_symbol
 from vnpy.utility.cooldown import (Cooldown, CooldownMap, StackableCooldown,
                                    StackableCooldownMap)
 from vnpy_simplestrategy import StrategyEngine, StrategyTemplate
@@ -1078,11 +1078,12 @@ class Combined(StrategyTemplate):
         原因是那么那么写有点复杂, 但实际上应该是要这样的.
         等有机会再重构这一块代码吧.
         """
-        # 目标报单为: 平仓,未成交,非风控(止盈)
+        # 目标报单为: 买平,未成交,非风控(止盈)
         target_orders = self.order_info[
-            (self.order_info['offset'].isin([Offset.CLOSE, Offset.CLOSETODAY, Offset.CLOSEYESTERDAY])) &
-            (self.order_info['status'].isin([Status.NOTTRADED])) &
-            (~self.order_info['memo'].str.contains('RiskCtrl'))  # 未成交的止盈平仓单
+            (self.order_info['direction'] == Direction.LONG) &  # 买入
+            (self.order_info['offset'].isin([Offset.CLOSE, Offset.CLOSETODAY, Offset.CLOSEYESTERDAY])) &  # 平仓
+            (self.order_info['status'].isin([Status.NOTTRADED])) &  # 未成交
+            (~self.order_info['memo'].str.contains('RiskCtrl'))  # 非风控
         ]
 
         for _, row in target_orders.drop_duplicates().iterrows():
@@ -1139,6 +1140,10 @@ class Combined(StrategyTemplate):
     @staticmethod
     def split_volume(max_volume: int, total_volume: int) -> list[int]:
         """自动拆单"""
+        # 强转整数以避免 TypeError: can't multiply sequence by non-int of type 'float'
+        max_volume = int(max_volume)
+        total_volume = int(total_volume)
+        # 神奇的海象运算符
         return (
             [max_volume]
             * (total_volume // max_volume)
@@ -1240,21 +1245,69 @@ class Combined(StrategyTemplate):
                         self.contract_send_count[vt_symbol] = 1
                 except Exception:
                     self.write_log(f"发送风控平仓待报入时遇到错误 ({vt_symbol}) {traceback.format_exc()}")
+
+    @dataclass
+    class CombinedContractInfo:
+        """
+        用于计算组合持仓量的临时数据结构, 详见使用这个类的代码实现.
+        """
+        exchange: Exchange
+        underlying: str
+        expiry_date: str
+        direction: str
+
+    @staticmethod
+    def extract_combined_contract_info(vt_symbol: str) -> CombinedContractInfo | None:
+        """使用正则表达式匹配标的物（字母）、到期日（数字）、方向（'P'或'C'）"""
+        symbol, exchange = extract_vt_symbol(vt_symbol)
+        match = re.match(r"([a-zA-Z]+)(\d+)-?(P|C)-?(\d+)$", symbol)
+        if match:
+            underlying = match.group(1)  # 标的物
+            expiry_date = match.group(2)  # 到期日
+            direction = match.group(3)  # 方向
+            price = match.group(4)  # 价格, 没有实际作用
+            return Combined.CombinedContractInfo(
+                exchange=exchange,
+                underlying=underlying,
+                expiry_date=expiry_date,
+                direction=direction,
+            )
+        else:
+            return None
+
+    def combined_volumes(self, target_vt_symbol: str, direction: Direction) -> float:
+        """
+        匹配与 target_vt_symbol 相同标的，相同到期日，相同方向，但忽略行权价的持仓量.
         
-    def combined_volumes(self, vt_symbol: str, direction: Direction) -> float:
-        """匹配相同标的，到期日，方向的合约数量"""
-        pos_holding: PositionHolding = self.get_position_holding(vt_symbol)
-        # 为什么多头算持仓量, 而空头算可平量?
-        # 如果多空都算可平量, 则多头可平量始终为0, 因为多头不会被程序撤单
-        # 如果多空都算持仓量, 则空头的持仓量不变, 就会被程序不断的AV平仓
-        match direction:
-            # 如果是多头, 就计算持仓量
-            case Direction.LONG: return pos_holding.long_pos
-            # 如果是空头, 则计算可平量
-            case Direction.SHORT: return pos_holding.short_pos - pos_holding.short_pos_frozen
-            # 如果不是多也不是空, 则抛出异常终止程序
-            case _:
-                raise ValueError(f"Unsupported direction: {direction}")
+        根据多空方向的不同，计算的持仓量不一样. 多头为计算持仓量, 而空头为计算可平量.
+        """
+        target_contract_info = self.extract_combined_contract_info(target_vt_symbol)
+        offset_converter = self.get_offset_converter()
+        pos_holding_dict = offset_converter.holdings
+
+        volume: float = 0.0
+        
+        for (vt_symbol, pos_holding) in pos_holding_dict.items():
+            test = self.extract_combined_contract_info(vt_symbol)
+            
+            if test != target_contract_info:
+                continue
+
+            # 为什么多头算持仓量, 而空头算可平量?
+            # 如果多空都算可平量, 则多头可平量始终为0, 因为多头不会被程序撤单
+            # 如果多空都算持仓量, 则空头的持仓量不变, 就会被程序不断的AV平仓
+            match direction:
+                # 如果是多头, 就计算持仓量
+                case Direction.LONG:
+                    volume += pos_holding.long_pos
+                # 如果是空头, 则计算可平量
+                case Direction.SHORT:
+                    volume += pos_holding.short_pos - pos_holding.short_pos_frozen
+                # 如果不是多也不是空, 则抛出异常终止程序
+                case _:
+                    raise ValueError(f"Unsupported direction: {direction}")
+
+        return volume
 
     def close_positions_for_loop_risk_ctrl(self, results_dict: dict[str, dict]) -> None:
         """循环风控"""
