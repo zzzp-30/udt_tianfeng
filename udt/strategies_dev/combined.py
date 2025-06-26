@@ -926,7 +926,9 @@ class Combined(StrategyTemplate):
         current_time = datetime.now(tz=CHINA_TZ).time()
         match exchange:
             case Exchange.CFFEX:
-                return time(9, 40) <= current_time <= time(14, 57)
+                return (
+                    time(9, 40) <= current_time <= time(14, 57)
+                )
             case Exchange.CZCE | Exchange.DCE | Exchange.SHFE | Exchange.INE | Exchange.GFEX:
                 return (
                     time(9, 10) <= current_time <= time(14, 57) or
