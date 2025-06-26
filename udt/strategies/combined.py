@@ -1381,9 +1381,9 @@ class Combined(StrategyTemplate):
         try:
             self.loop_risk_ctrl.on_order(order)
         except Exception:
-            self.write_log(f"执行OP1操作时发生错误 {traceback.format_exc()}")
+            self.write_log(f"执行 LoopRiskCtrl 操作时发生错误 {traceback.format_exc()}")
         
-        # 响应 AvTrendClosePose
+        # 响应 AvTrendClosePos
         try:
             self.av_trend_close_pos.on_order(order)
         except Exception:
