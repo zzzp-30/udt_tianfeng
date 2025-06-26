@@ -12,7 +12,6 @@ from vnpy.trader.engine import EventEngine, MainEngine, OmsEngine
 from vnpy.trader.object import AccountData, OrderData, PositionData, TradeData
 from vnpy.trader.setting import SETTINGS
 from vnpy_ctp import CtpGateway
-# from vnpy_ctptest import CtptestGateway
 from vnpy_simplestrategy import SimpleStrategyApp, StrategyEngine
 # from vnpy_tts import TtsGateway
 
@@ -64,18 +63,6 @@ from vnpy_simplestrategy import SimpleStrategyApp, StrategyEngine
 #     "产品信息": ""
 # }
 
-# 紫金天风 仿真
-# ctp_setting = {
-#     "用户名": "61130",
-#     "密码": "tfqh@123",
-#     "经纪商代码": "0001",
-#     "交易服务器": "114.80.55.98:64205",
-#     "行情服务器": "114.80.55.98:64213",
-#     "产品名称": "client_unboundream_v2",
-#     "授权编码": "3J474CT8DL4EUW6F",
-#     "产品信息": "unboundream"
-# }
-
 # 紫金天风 实盘
 ctp_setting = {
     "用户名": "89110038",
@@ -87,18 +74,6 @@ ctp_setting = {
     "授权编码": "3J474CT8DL4EUW6F",
     "产品信息": "unboundream"
 }
-
-# 宏源期货 仿真
-# ctp_setting = {
-#     "用户名": "333307037",
-#     "密码": "",  # 未提供密码
-#     "经纪商代码": "3070",
-#     "交易服务器": "120.136.162.186:32205",
-#     "行情服务器": "120.136.170.162:32213",
-#     "产品名称": "client_udt_v2",
-#     "授权编码": "WF5WKL7TGPHTIL2U",
-#     "产品信息": "udt"
-# }
 
 
 # Chinese futures market trading period (day/night)
@@ -145,13 +120,11 @@ def run_child() -> None:
     main_engine.add_gateway(CtpGateway)
     main_gateway: CtpGateway = main_engine.get_gateway("CTP") # type: ignore
     
-    # 使用 CtptestGateway
-    # main_engine.add_gateway(CtptestGateway)
-    # main_gateway: CtptestGateway = main_engine.get_gateway("CTPTEST") # type: ignore
-    
-    # --- 登录 CTP ---
+    # --- 登录底层接口 CTP ---
     
     # 尝试登录，如果失败则退出程序
+
+    # Note: CtpGateway#connect 会开始一个定时任务, 按固定间隔更新 AccountData 和 PositionData
     main_gateway.connect(ctp_setting)
     main_engine.write_log("连接CTP接口")
 
@@ -174,21 +147,8 @@ def run_child() -> None:
         sys.exit(0)
     
     main_engine.write_log("主引擎创建成功")
-
-    # --- 创建 SimpleStrategy App ---
     
-    # 添加 App
-    strategy_engine: StrategyEngine = main_engine.add_app(SimpleStrategyApp) # type: ignore
-    # 初始化 Engine
-    strategy_engine.init_engine()
-    # 打印已加载的 strategy classes
-    strategy_engine.write_log(f"已加载策略: {strategy_engine.get_all_strategy_class_names()}")
-    # 调用 StrategyTemplate#on_init (异步执行，但同步等待)
-    wait(strategy_engine.init_all_strategies().values())
-    # 调用 StrategyTemplate#on_start
-    strategy_engine.start_all_strategies()
-    
-    # --- 账户相关信息 ---
+    # --- 打印投资者账户信息 ---
     
     main_engine.write_log("订单信息(所有账号):")
     [main_engine.write_log(f"vt_symbol={order.vt_symbol}, vt_orderid={order.vt_orderid}, ordersysid={order.ordersysid}, direction={order.direction}, offset={order.offset}, status={order.status} @{order.price}") for order in main_engine.get_all_orders()]
@@ -202,7 +162,18 @@ def run_child() -> None:
     main_engine.write_log("账户信息(所有):")
     [main_engine.write_log(f"vt_accountid={acc.vt_accountid}, balance={acc.balance}, frozen={acc.frozen}, available={acc.available}") for acc in main_engine.get_all_accounts()]
     
-    # --- 订阅所有期权合约 ---
+    # --- 启动 SimpleStrategy App ---
+    
+    # 添加 App
+    strategy_engine: StrategyEngine = main_engine.add_app(SimpleStrategyApp) # type: ignore
+    # 初始化 Engine
+    strategy_engine.init_engine()
+    # 打印已加载的 strategy classes
+    strategy_engine.write_log(f"已加载策略: {strategy_engine.get_all_strategy_class_names()}")
+    # 调用 StrategyTemplate#on_init (异步执行，但同步等待)
+    wait(strategy_engine.init_all_strategies().values())
+    # 调用 StrategyTemplate#on_start
+    strategy_engine.start_all_strategies()
     
     while True:
         sleep(10)
