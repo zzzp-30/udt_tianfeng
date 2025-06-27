@@ -11,55 +11,37 @@ requires-python = ">=3.13"
 dependencies = [
     "pip",
     "ipykernel",
-    "line_profiler",
     "pandas-stubs",
     "vnpy",
     "vnpy-akshare",
-    "vnpy-ctabacktester",
-    "vnpy-ctastrategy",
     "vnpy-ctp",
     "vnpy-ctptest",
-    "vnpy-datamanager",
     "vnpy-mysql",
-    "vnpy-paperaccount",
-    "vnpy-portfoliomanager",
     # "vnpy-portfoliostrategy",
-    "vnpy-postgresql",
-    "vnpy-riskmanager",
     "vnpy-rpcservice",
-    "vnpy-scripttrader",
     "vnpy-simplestrategy",
     # "vnpy-sopt",  # C++ 编译暂时有问题
     # "vnpy-sopttest",  # 同上
     "vnpy-sqlite",
     "vnpy-tts",
     "vnpy-tushare",
-    "vnpy-webtrader",
 ]
 
 [tool.uv.sources]
 vnpy = { path = "../vnpy" }
 vnpy-akshare = { path = "../vnpy_akshare" }
-vnpy-ctabacktester = { path = "../vnpy_ctabacktester" }
-vnpy-ctastrategy = { path = "../vnpy_ctastrategy" }
 vnpy-ctp = { path = "../vnpy_ctp" }
 vnpy-ctptest = { path = "../vnpy_ctptest" }
 vnpy-datamanager = { path = "../vnpy_datamanager" }
 vnpy-mysql = { path = "../vnpy_mysql" }
-vnpy-paperaccount = { path = "../vnpy_paperaccount" }
-vnpy-portfoliomanager = { path = "../vnpy_portfoliomanager" }
 # vnpy-portfoliostrategy = { path = "../vnpy_portfoliostrategy" }
-vnpy-postgresql = { path = "../vnpy_postgresql" }
-vnpy-riskmanager = { path = "../vnpy_riskmanager" }
 vnpy-rpcservice = { path = "../vnpy_rpcservice" }
-vnpy-scripttrader = { path = "../vnpy_scripttrader" }
 vnpy-simplestrategy = { path = "../vnpy_simplestrategy" }
 vnpy-sopt = { path = "../vnpy_sopt" }
 vnpy-sopttest = { path = "../vnpy_sopttest" }
 vnpy-sqlite = { path = "../vnpy_sqlite" }
 vnpy-tts = { path = "../vnpy_tts" }
 vnpy-tushare = { path = "../vnpy_tushare" }
-vnpy-webtrader = { path = "../vnpy_webtrader" }
 
 [tool.ruff]
 target-version = "py313"
