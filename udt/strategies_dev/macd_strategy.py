@@ -22,9 +22,6 @@ from vnpy.utility.cooldown import (Cooldown, CooldownMap, StackableCooldown,
 from vnpy_simplestrategy import StrategyEngine, StrategyTemplate
 from vnpy_simplestrategy.utility import PortfolioBarGenerator
 
-
-CHINA_TZ: ZoneInfo = ZoneInfo("Asia/Shanghai")
-
 # FIXME see: https://pandas.pydata.org/pandas-docs/stable/user_guide/copy_on_write.html
 pd.options.mode.copy_on_write = False  # 默认值是 'warn'
 pd.options.mode.chained_assignment = None  # 默认值是 'warn'
@@ -33,7 +30,7 @@ pd.options.mode.chained_assignment = None  # 默认值是 'warn'
 CHINA_TZ: ZoneInfo = ZoneInfo("Asia/Shanghai")
 
 # 本策略使用的飞书自定义机器人
-# feishu_webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/911dd4d6-d892-4723-9a56-671f91b54b82"
+feishu_webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/911dd4d6-d892-4723-9a56-671f91b54b82"
 # 本策略使用的飞书消息模板
 feishu_message_template = lambda ctx: {
     "msg_type": "interactive",
@@ -252,6 +249,13 @@ class MacdStrategy(StrategyTemplate):
         self.twenty_five_min_high: dict[str, float] = {}
         self.twenty_five_min_low: dict[str, float] = {}
 
+        # 最近一次期权的开仓价格
+        self.open_option_price: dict[str, float] = {}
+        # 第一次开仓对应的期货价格
+        self.open_futures_price: dict[str, float] = {}
+        # 最近一次期权的开仓时间
+        self.vt_symbol_open_time: dict[str, datetime] = {}
+
         # 积累的订单信息
         self.order_info_cols: dict[str, str] = {
             # 以下列是通用的
@@ -356,11 +360,16 @@ class MacdStrategy(StrategyTemplate):
         all_contracts: list[ContractData] = self.main_engine.get_all_contracts()
         # 字典形式的 ContractData, 用于构建初始的 DataFrame
         all_contract_dict_list: list[dict[str, object]] = list()
+
+        # 指定要订阅的品种
+        target_products = ["ps_o", "TA"]  # 修改为你需要的品种
+
         # 收集特定 ContractData 的字典形式的数据
         for contract in all_contracts:
             if (
                 contract.product == Product.OPTION and
-                contract.exchange in exchange_list
+                contract.exchange in exchange_list and
+                contract.option_portfolio in target_products  # 只选择指定品种的期权
             ):
                 all_contract_dict_list.append({
                     # 原生字段
@@ -682,18 +691,23 @@ class MacdStrategy(StrategyTemplate):
                 else:
                     continue
                 
+                # 筛选符合条件的合约
                 filtered = group[condition]
-                
-                # 先尝试选 date_rank == 1 的
+
+                target = []
+                # 优先选择 date_rank == 1 的合约
                 selected = filtered[filtered['date_rank'] == 1]
-                
-                # 如果没有，再选 date_rank == 2 的
+
+                # 如果没有找到，再尝试选择 date_rank == 2 的合约
                 if selected.empty:
                     selected = filtered[filtered['date_rank'] == 2]
-                
-                # 如果还有空，就不添加这个标的的目标
+
+                # 如果有符合条件的合约，则添加到目标列表
                 if not selected.empty:
-                    target_option = DataFrame()
+                    target.append(selected)
+
+            # 合并所有选中的合约
+            target_option = pd.concat(target) if target else DataFrame()
 
             # results_dict 仅仅是把所有的 results 变成 dict
             # target_option 用于开仓
@@ -727,7 +741,7 @@ class MacdStrategy(StrategyTemplate):
             vt_symbol: 合约代码
             direction: 开仓方向
         Returns:
-            None
+            bool
         """
         
         try:
@@ -787,20 +801,26 @@ class MacdStrategy(StrategyTemplate):
                             # Note: 主要是为了测试而添加的限制, 除此之外已经有根据品种占用的资金比例来限制开仓的机制了
                             self.total_traded_volume += self.volume_per_open_position * 2
                             self.single_traded_volume[vt_symbol] = self.single_traded_volume.get(vt_symbol, 0) + volume * 2
+
+                            total_positions = self.main_engine.get_all_positions()
+                            vt_symbol_position = next((pos for pos in total_positions if pos.vt_symbol == row['vt_symbol'] and pos.volume > 0), None)
+                            if vt_symbol_position is None:
+                                # 记录第一次开仓时对应期货的价格
+                                self.open_futures_price['vt_symbol'] = row['future_lastPrice']
+                            # 记录最近一次期权的开仓价格
+                            self.open_option_price['vt_symbol'] = row['option_askPrice1']
                         except Exception:
                             self.write_log(f"开仓时遇到错误 ({row['vt_symbol']}) {traceback.format_exc()}")
 
     def open_condition(self, row: pd.Series, product_type: str) -> bool:
         """开仓条件判断"""
-        total_positions = self.main_engine.get_all_positions()
-        position = next((pos for pos in total_positions if pos.vt_symbol == row['vt_symbol'] and pos.volume > 0), None)
-
         return (
             (
-                position is None
+                # 如果没有持仓则允许开仓
+                self.open_option_price.get(row['vt_symbol'], 0) == 0
                 or 
-                # 如果没有持仓 或 当前买一价低于持仓价格减去 10 ticks，则允许开仓
-                row['option_bidPrice1'] < (position.price - 10 * row['price_tick'])
+                # 如果有持仓则且当前买一价低于上一次开仓的价格减去 10 ticks，则允许开仓
+                row['option_bidPrice1'] < (self.open_option_price[row['vt_symbol']] - 10 * row['price_tick'])
             )
             and
             (
@@ -808,7 +828,7 @@ class MacdStrategy(StrategyTemplate):
                     row["option_type"] == OptionType.CALL
                     and
                     (
-                        self.macd_data[row['vt_underlying_symbol']] < 0
+                        self.macd_data.get(row['vt_underlying_symbol'], 0) < 0
                     )
                     and
                     (
@@ -824,7 +844,7 @@ class MacdStrategy(StrategyTemplate):
                     row["option_type"] == OptionType.PUT
                     and
                     (
-                        self.macd_data[row['vt_underlying_symbol']] > 0
+                        self.macd_data.get(row['vt_underlying_symbol'], 0) > 0
                     )
                     and
                     (
@@ -860,7 +880,6 @@ class MacdStrategy(StrategyTemplate):
             self.open_position_cooldown.test()
         )
 
-    # TODO:
     def request_open_position(self, vt_symbol: str, direction: Direction, price: float, volume: int, memo: str) -> None:
         """发送开仓订单"""
         try:
@@ -881,7 +900,6 @@ class MacdStrategy(StrategyTemplate):
         except Exception:
             self.write_log(f"开仓时遇到错误 ({vt_symbol}) {traceback.format_exc()}")
 
-    # TODO:
     def request_close_position(self, vt_symbol: str, direction: Direction, price: float, volume: int, memo: str) -> None:
         """发送平仓订单"""
         try:
@@ -912,21 +930,14 @@ class MacdStrategy(StrategyTemplate):
             time(21, 10) <= current_time <= time(23, 55)
         )
 
-    @staticmethod
-    def check_future_condition(data: dict, option_type: OptionType) -> bool:
+    def check_future_condition(self, data: dict, option_type: OptionType) -> bool:
         last_price = data['future_lastPrice']
-        open_price = data['future_openPrice']
-        pre_close = data['future_preClosePrice']
-        pre_settlement = data['future_pre_settlement_price']
+        open_futures_price = self.open_futures_price.get(data['vt_symbol'], 1888888888)
 
         if option_type == OptionType.CALL:
-            return (last_price > 1.015 * pre_close or
-                    ((last_price / pre_settlement) - 1) > (((data['future_upperLimit'] / pre_settlement) - 1) / 2) or
-                    (last_price > data['y_high'] and last_price > data['by_high'] and (last_price > 1.005 * pre_close or last_price > 1.005 * open_price)))
+            return (last_price > open_futures_price)
         elif option_type == OptionType.PUT:
-            return (last_price < 0.985 * pre_close or
-                    ((last_price / pre_settlement) - 1) < (((data['future_lowerLimit'] / pre_settlement) - 1) / 2) or
-                    (last_price < data['y_low'] and last_price < data['by_low'] and (last_price < 0.995 * pre_close or last_price < 0.995 * open_price)))
+            return (last_price < open_futures_price)
         else:
             return False
 
@@ -959,40 +970,65 @@ class MacdStrategy(StrategyTemplate):
             if (position.volume - position.frozen) > 0 and position.direction == Direction.SHORT
         ]
 
-    def close_positions_for_end(self, results_dict: dict[str, dict]) -> None:
-        """14:50平仓"""
-        if self.current_time >= datetime.strptime('14:50:00', '%H:%M:%S'):
-            total_positions = self.main_engine.get_all_positions()
-        
-        # 可平量大于 0 的空头持仓
-        closable_positions: list[PositionData] = [
-            position
-            for position in total_positions
-            if (position.volume - position.frozen) > 0 and position.direction == Direction.SHORT
-        ]
-
         # 对于可平的空头持仓, 如果满足条件则平仓
         for close in closable_positions:
             vt_symbol = close.vt_symbol
             close_available_volume = int(close.volume - close.frozen)
 
-            if vt_symbol not in results_dict:
+            if vt_symbol not in results_dict or vt_symbol not in self.open_option_price.keys():
                 continue
 
-            try:
-                data = results_dict[vt_symbol]
-                if self.close_positon_cooldown.test():
-                    total_positions = self.main_engine.get_all_positions() # 更新账户持仓信息
-                    if close_available_volume > 0:
-                        # 获取有效买一价，如果不存在或为0则使用最小价格单位，并确保不低于最小价格单位
-                        bid_price = max(data.get('option_bidPrice1', data['price_tick']), data['price_tick'])
-                        self.avoid_self_dealing(vt_symbol, Direction.LONG, bid_price)
-                        volume_list = self.split_volume(int(data['max_volume']), close_available_volume)
-                        for sub in volume_list:
-                            self.request_close_position(vt_symbol, Direction.LONG, bid_price, sub, f'End{self.order_count}')
-                            self.write_log(f"平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{bid_price}")
-            except Exception:
-                self.write_log(f"14点50分平仓时遇到错误 {vt_symbol}")
+            data = results_dict[vt_symbol]
+            if ((datetime.now(tz=CHINA_TZ) > self.vt_symbol_open_time.get(vt_symbol, datetime.now(tz=CHINA_TZ)) + Timedelta(minutes=5))
+                and
+                (data['option_bidPrice1'] > self.open_option_price.get(vt_symbol, 0))):
+                try:
+                    if self.close_positon_cooldown.test():
+                        if close_available_volume > 0:
+                            # 获取有效买一价，如果不存在或为0则使用最小价格单位，并确保不低于最小价格单位
+                            bid_price = max(data.get('option_bidPrice1', data['price_tick']), data['price_tick'])
+                            self.avoid_self_dealing(vt_symbol, Direction.LONG, bid_price)
+                            volume_list = self.split_volume(int(data['max_volume']), close_available_volume)
+                            for sub in volume_list:
+                                self.request_close_position(vt_symbol, Direction.LONG, bid_price, sub, f'PrinProt{self.order_count}')
+                                self.write_log(f"平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{bid_price}")
+                except Exception:
+                    self.write_log(f"保本平仓时遇到错误 {vt_symbol}")
+
+    def close_positions_for_end(self, results_dict: dict[str, dict]) -> None:
+        """14:50平仓"""
+        if self.current_time >= datetime.strptime('14:50:00', '%H:%M:%S'):
+            total_positions = self.main_engine.get_all_positions()
+        
+            # 可平量大于 0 的空头持仓
+            closable_positions: list[PositionData] = [
+                position
+                for position in total_positions
+                if (position.volume - position.frozen) > 0 and position.direction == Direction.SHORT
+            ]
+
+            # 对于可平的空头持仓, 如果满足条件则平仓
+            for close in closable_positions:
+                vt_symbol = close.vt_symbol
+                close_available_volume = int(close.volume - close.frozen)
+
+                if vt_symbol not in results_dict or vt_symbol not in self.open_option_price.keys():
+                    continue
+
+                try:
+                    data = results_dict[vt_symbol]
+                    if self.close_positon_cooldown.test():
+                        total_positions = self.main_engine.get_all_positions() # 更新账户持仓信息
+                        if close_available_volume > 0:
+                            # 获取有效买一价，如果不存在或为0则使用最小价格单位，并确保不低于最小价格单位
+                            bid_price = max(data.get('option_bidPrice1', data['price_tick']), data['price_tick'])
+                            self.avoid_self_dealing(vt_symbol, Direction.LONG, bid_price)
+                            volume_list = self.split_volume(int(data['max_volume']), close_available_volume)
+                            for sub in volume_list:
+                                self.request_close_position(vt_symbol, Direction.LONG, bid_price, sub, f'End{self.order_count}')
+                                self.write_log(f"平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{bid_price}")
+                except Exception:
+                    self.write_log(f"14点50分平仓时遇到错误 {vt_symbol}")
 
     def close_positions_for_risk_ctrl(self, results_dict: dict[str, dict]) -> None:
         """
@@ -1013,7 +1049,7 @@ class MacdStrategy(StrategyTemplate):
             close_available_volume = int(close.volume - close.frozen)
             open_price = close.price
 
-            if vt_symbol not in results_dict:
+            if vt_symbol not in results_dict or vt_symbol not in self.open_option_price.keys():
                 continue
 
             try:
@@ -1032,7 +1068,7 @@ class MacdStrategy(StrategyTemplate):
                         self.avoid_self_dealing(vt_symbol, Direction.LONG, bid_price)
                         volume_list = self.split_volume(int(data['max_volume']), close_available_volume)
                         for sub in volume_list:
-                            self.request_close_position(vt_symbol, Direction.LONG, bid_price, sub, f'RiskCtrl{self.order_count}')
+                            self.request_close_position(vt_symbol, Direction.LONG, bid_price, sub, f'MACDRiskCtrl{self.order_count}')
                             self.write_log(f"平仓{self.order_count} 合约={vt_symbol} 方向={Direction.LONG} 手数={sub} @{bid_price}")
                 # 未来可能适用于ETF期权，但注意平仓前要撤止盈单
                 # else:
@@ -1110,21 +1146,21 @@ class MacdStrategy(StrategyTemplate):
             for index, row in orders_to_process.iterrows():
                 vt_symbol: str = row['vt_symbol']
                 ordersysid: str = row['ordersysid']
-                    
+                # 提取memo前缀
+                match = re.match(r'^([A-Za-z]+)\d+$', row['memo'])
+
                 if vt_symbol not in results_dict:
                     continue
-
+                    
                 result_data = results_dict[vt_symbol]
                 signal = result_data['open_signal']
-                if self.current_time > row['loop_time'] and signal:
+                
+                if self.current_time > row['loop_time'] and match and signal: 
+                    memo_prefix = match.group(1)
+                    memo: str = f"{memo_prefix}{self.order_count}"
                     direction: Direction = Direction.LONG
                     price: float = result_data['option_bidPrice1'] + result_data['price_tick']
                     volume: int = row['volume']
-                    if 'RiskCtrl' in str(row['memo']):
-                        memo: str = f"RiskCtrl{str(self.order_count)}"
-                    elif 'End' in str(row['memo']):
-                        memo: str = f"End{str(self.order_count)}"
-
                     params: Op1Params = Op1Params(
                         ordersysid=ordersysid,
                         vt_symbol=vt_symbol,
@@ -1178,13 +1214,13 @@ class MacdStrategy(StrategyTemplate):
             
             # 更新还未成交的风控单的 'loop_time'，使其能够在 def close_positons_for_loop_risk_ctrl 中进行再风控操作
             # 目前的程序逻辑: 如果 self.order_info 的 'loop_time' 列不为 NaT 则说明需要循环风控, 没有则说明不需要
-            mask_orders_in_risk_ctrl_or_end = self.order_info['memo'].str.contains('RiskCtrl|End')
+            mask_orders_in_risk_ctrl_or_end = self.order_info['memo'].str.contains('MACDRiskCtrl|End')
             mask_orders_on_pending = (self.order_info['status'] == Status.NOTTRADED) | (self.order_info['status'] == Status.PARTTRADED)
             mask_orders_to_loop_risk_ctrl = mask_orders_in_risk_ctrl_or_end & mask_orders_on_pending
             self.order_info['loop_time'] = pd.Series(pd.NaT, dtype='datetime64[ns, Asia/Shanghai]')  # Note: 必须指定 dtype 使 NaT 带上时区
             self.order_info.loc[mask_orders_to_loop_risk_ctrl, 'loop_time'] = self.order_info.loc[mask_orders_to_loop_risk_ctrl, 'datetime'] + pd.Timedelta(seconds=self.loop_risk_ctrl_cooldown)
             
-            if 'RiskCtrl' in str(order.memo) and order.status == Status.NOTTRADED:
+            if 'MACDRiskCtrl' in str(order.memo) and order.status == Status.NOTTRADED:
                 product_name: str = self.results.loc[self.results['vt_symbol'] == order.vt_symbol, '期货'].item()
                 context = (
                     f'账户：谦量天风\n'
@@ -1194,10 +1230,10 @@ class MacdStrategy(StrategyTemplate):
                     f'备注：{order.memo}'
                 )
                 self.write_log(context)
-                self.main_engine.send_feishu(
-                    feishu_webhook_url,
-                    feishu_message_template(context),
-                )
+                # self.main_engine.send_feishu(
+                #     feishu_webhook_url,
+                #     feishu_message_template(context),
+                # )
         except Exception:
             self.write_log(f"处理订单更新遇到错误 {traceback.format_exc()}")
     
@@ -1219,11 +1255,11 @@ class MacdStrategy(StrategyTemplate):
             
             _, _, self.macd_data[vt_underlying_symbol] = am.macd(self.fast_period, self.slow_period, self.signal_period) # type: ignore
 
-        # 获取最近5根5分钟K线的新高
-        high_prices: np.ndarray = am.high_array[-5:]
+            # 获取最近5根5分钟K线的新高
+            high_prices: np.ndarray = am.high_array[-5:]
 
-        self.twenty_five_min_high[vt_underlying_symbol] = high_prices.max()
-        self.twenty_five_min_low[vt_underlying_symbol] = high_prices.min()
+            self.twenty_five_min_high[vt_underlying_symbol] = high_prices.max()
+            self.twenty_five_min_low[vt_underlying_symbol] = high_prices.min()
 
         # 推送界面更新
         self.put_event()
