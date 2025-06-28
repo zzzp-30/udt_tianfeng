@@ -11,14 +11,14 @@
     "email.sender": "",
     "email.receiver": "",
 
-    "datafeed.name": "tushare",
-    "datafeed.username": "token",
-    "datafeed.password": "c3a110417f08f26d2c221edc0c50d4a8a5001502eea89cf5",
+    "datafeed.name": "",
+    "datafeed.username": "",
+    "datafeed.password": "",
 
-    "database.name": "sqlite",
-    "database.database": "database.db",
-    "database.host": "",
-    "database.port": 0,
-    "database.user": "",
-    "database.password": ""
+    "database.name": "mysql",
+    "database.database": "market_data",
+    "database.host": "localhost",
+    "database.port": 3306,
+    "database.user": "root",
+    "database.password": "root@123"
 }
