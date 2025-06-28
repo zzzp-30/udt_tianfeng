@@ -735,7 +735,7 @@ class Combined(StrategyTemplate):
 
     def open_positions(self, target_option: DataFrame) -> None:
         """开仓"""
-        for (product_type), group in target_option.groupby(['product_type'], sort=False):
+        for product_type, group in target_option.groupby('product_type', sort=False):
             for _, row in group.iterrows():
                 if self.open_condition(row, str(product_type)):
                     try:
