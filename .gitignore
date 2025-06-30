@@ -13,7 +13,9 @@ wheels/
 .venv
 
 # vnpy 的数据和配置
-udt/data
+udt/data/log
+udt/data/ctp
+udt/data/tts
 
 # Log
 *.log
