@@ -105,6 +105,7 @@ class Combined(StrategyTemplate):
         self.product_mapping_dict: dict[str, str] = {}
         # 每个合约的参数和状态, 包括期权和期货
         self.results_cols: dict[str, str] = {
+            # 这些字段来自 self.main_engine.get_all_contracts()
             'symbol': 'string',
             'exchange': 'object',  # enum: Exchange
             'product': 'string',
@@ -116,16 +117,16 @@ class Combined(StrategyTemplate):
             'vt_symbol': 'string',
             'vt_underlying_symbol': 'string',
             
-            # 计算得到的剩余交易日
+            # 这个字段是基于当前时间和到期日计算得到的剩余交易日
             'remaining_trading_days': 'int64',
             
-            # 从历史行情获取的价格信息
+            # 从历史行情 (目前是 AkShare) 获取的价格信息
             'by_high': 'float64',  # Before-Yesterday 最高价
             'by_low': 'float64',  # Before-Yesterday 最低价
             'y_high': 'float64',  # Yesterday 最高价
             'y_low': 'float64',  # Yesterday 最低价
             
-            # 从表格读取到的固定参数
+            # 从表格 (params.xlsx) 读取到的固定参数
             '期货': 'string',
             'product_name': 'string',
             '可挂单': 'string',
@@ -199,7 +200,6 @@ class Combined(StrategyTemplate):
     def on_init(self) -> None:
         """策略初始化"""
         
-        # FIXME 每个策略需要区分投资者账号
         # 将投资者当前的全部订单写入 self.order_info
         all_order_data: list[OrderData] = self.main_engine.get_all_orders()
         new_order_records = DataFrame([
@@ -296,8 +296,10 @@ class Combined(StrategyTemplate):
         # 添加列: 剩余交易日
         self.results['remaining_trading_days'] = self.results['expire_date'].apply(self.calculate_remaining_trading_days)
         
-        # FIXME 新品种需要手动加入到这个表格. 如果新品种不存在于这个表格, 则新品种将缺失对应的交易时间等固定参数
-        # 读取每个品种的固定参数, 详见这里读取的文件
+        # 读取每个品种的固定参数, 详见这里读取的文件  # FIXME 新品种需要手动加入到这个表格. 如果新品种不存在于这个表格, 则新品种将缺失对应的交易时间等固定参数
+        # 这里使用了方便函数 get_file_path 来获取完整的文件路径
+        # 确保文件在 udt/data 文件夹里就可以只写文件名来读取文件
+        # 省去指定完整文件路径的麻烦
         params: DataFrame = pd.read_excel(get_file_path("params(GXHYTF).xlsx"))
         
         # 转换列: 转成 enum 方便后面比较
@@ -321,7 +323,13 @@ class Combined(StrategyTemplate):
         self.add_historical_data()
 
     def add_historical_data(self) -> None:
-        """添加历史数据"""
+        """
+        添加历史数据
+        
+        获取每个合约的上个和上上个交易日的结算价, 并把它添加到 self.results 中.
+        目前的实现采用 AkShare 来获取历史数据, 数据源直接来自交易所 (ak.get_futures_daily),
+        并且就算不更新 AkShare 这个库, 从 ak 返回的品种历史数据也都是全的.
+        """
         # 从 AkShare 获取所有交易日
         tool_trade_date_hist_sina_df = ak.tool_trade_date_hist_sina()
         tool_trade_date_hist_sina_df['trade_date'] = pd.to_datetime(tool_trade_date_hist_sina_df['trade_date']).dt.tz_localize(tz=CHINA_TZ)
@@ -377,6 +385,8 @@ class Combined(StrategyTemplate):
             byd_df_list.append(byd_df)
             yd_df_list.append(yd_df)
 
+        # Note: 以下代码用于修正中金所返回的错误
+        #
         # 加载中金所期权代码映射表
         cffex_option_symbol_fix: DataFrame = pd.read_csv(get_file_path("cffex_option_symbol_fix.csv"), encoding='utf-8')
         # 创建映射字典：ctp_underlying_product -> akshare_underlying_product
@@ -402,8 +412,10 @@ class Combined(StrategyTemplate):
         self.future_vt_symbols = set(future_vt_symbols)
         self.option_vt_symbols = set(option_vt_symbols)
 
+        # TODO 添加一个 settings 可以从外部传入参数来不订阅指定的合约
+        # TODO 暂时这么写😭 未来应该改一下 vnpy_simplestrategy 模块, 使用专门的函数来订阅合约
         # 直接重写 StrategyTemplate#vt_symbols
-        self.vt_symbols = option_vt_symbols + future_vt_symbols  # TODO 暂时这么写😭未来应该使用专门的函数来订阅合约
+        self.vt_symbols = option_vt_symbols + future_vt_symbols
         
         self.total_instruments_num = len(self.vt_symbols)
     
@@ -481,7 +493,7 @@ class Combined(StrategyTemplate):
 
     def cal_fund_tie(self, vt_positionid: str) -> float:
         """计算合约资金占用"""
-        balance = self.main_engine.get_all_accounts()[0].balance  # FIXME 原版这是动态权益
+        balance = self.main_engine.get_all_accounts()[0].balance
         position = self.main_engine.get_position(vt_positionid)
         if not position:
             return .0
@@ -604,6 +616,7 @@ class Combined(StrategyTemplate):
             if processed_results.empty:
                 return {}, DataFrame()
             
+            # 定义一个函数，用于计算 diff1
             def calc_diff(row: Series) -> float:
                 exchange = row['exchange']
                 symbol = row['symbol']
@@ -690,7 +703,7 @@ class Combined(StrategyTemplate):
             self.close_positions_for_loop_risk_ctrl(results_dict)
             self.close_positions_for_AV(results_dict)
             self.open_positions(target_option)  # 邹老师: 法定节假日前关闭开仓
-            self.cancel_wrong_orders(results_dict)
+            self.cancel_orders_in_risk(results_dict)
         except Exception:
             self.write_log(f"执行交易信号时遇到错误 {traceback.format_exc()}")
 
@@ -765,7 +778,22 @@ class Combined(StrategyTemplate):
         coefficient = row['vix']  # vix 越低对浮动要求越低, 也就越容易开仓, 反之亦然
         exchange = row['exchange']
         
+        # 不开仓的交易所，在这里进行指定
+        exchanges_that_do_not_open_positions: list[Exchange] = [
+            # Exchange.CFFEX,
+            # Exchange.CZCE,
+            # Exchange.DCE,
+            # Exchange.SHFE,
+            # Exchange.INE,
+            # Exchange.GFEX,
+        ]
+        if exchange in exchanges_that_do_not_open_positions:
+            return False
+        
+        # 按照交易所，进行对应的开仓条件判断
         match exchange:
+            
+            # 中金所的开仓条件
             case Exchange.CFFEX:
                 return (
                     (
@@ -776,7 +804,7 @@ class Combined(StrategyTemplate):
                     and
                     (
                         (
-                            row["option_type"] == "CALL"
+                            row["option_type"] == OptionType.CALL
                             and
                             row["future_lastPrice"] < (1 - 0.003 * coefficient) * row["future_openPrice"]
                             and
@@ -784,7 +812,7 @@ class Combined(StrategyTemplate):
                         )
                         or
                         (
-                            row["option_type"] == "PUT"
+                            row["option_type"] == OptionType.PUT
                             and
                             row["future_lastPrice"] > (1 + 0.003 * coefficient) * row["future_openPrice"]
                             and
@@ -812,6 +840,8 @@ class Combined(StrategyTemplate):
                     and
                     self.open_position_cooldown.test()
                 )
+
+            # 郑商所、大商所、上期所、能源所、广期所的开仓条件
             case Exchange.CZCE | Exchange.DCE | Exchange.SHFE | Exchange.INE | Exchange.GFEX:
                 return (
                     (
@@ -878,12 +908,13 @@ class Combined(StrategyTemplate):
                     and
                     self.open_position_cooldown.test()
                 )
+
+            # 对于其他不受支持的交易所，直接抛出异常（这不应该发生，之前的 case 必须覆盖所有情况）
             case _:
                 raise ValueError(f"不支持的交易所: {exchange.value}")
 
-    # TODO:
     def request_open_position(self, vt_symbol: str, direction: Direction, price: float, volume: int, memo: str) -> None:
-        """发送开仓订单"""
+        """发送开仓订单，考虑自成交风险"""
         try:
             can_proceed = self.avoid_self_dealing(vt_symbol, direction, price)
             if not can_proceed:
@@ -902,13 +933,11 @@ class Combined(StrategyTemplate):
         except Exception:
             self.write_log(f"开仓时遇到错误 ({vt_symbol}) {traceback.format_exc()}")
 
-    # TODO:
     def request_close_position(self, vt_symbol: str, direction: Direction, price: float, volume: int, memo: str) -> None:
-        """发送平仓订单"""
+        """发送平仓订单，考虑自成交风险"""
         try:
             can_proceed = self.avoid_self_dealing(vt_symbol, direction, price)
             if not can_proceed:
-                # TODO 这个平仓函数可能会因为"防自成交机制"而平仓失败
                 self.write_log(f"自成交风险未解除，跳过开仓 {vt_symbol}")
                 return
             
@@ -924,20 +953,30 @@ class Combined(StrategyTemplate):
         except Exception:
             self.write_log(f"平仓操作时遇到错误 ({vt_symbol}) {traceback.format_exc()}")
 
-
     @staticmethod
     def is_trading_time(exchange: Exchange) -> bool:
+        """
+        判断是否可以在当前时间对指定交易所进行交易
+        """
         current_time = datetime.now(tz=CHINA_TZ).time()
+
+        # 根据交易所判断当前时间是否在交易时间内
         match exchange:
+            
+            # 中金所的交易时间
             case Exchange.CFFEX:
                 return (
                     time(9, 40) <= current_time <= time(14, 57)
                 )
+            
+            # 郑商所、大商所、上期所、能源所、广期所的交易时间
             case Exchange.CZCE | Exchange.DCE | Exchange.SHFE | Exchange.INE | Exchange.GFEX:
                 return (
                     time(9, 10) <= current_time <= time(14, 57) or
                     time(21, 10) <= current_time <= time(23, 55)
                 )
+            
+            # 对于其他不受支持的交易所，直接抛出异常（这不应该发生，之前的 case 必须覆盖所有情况）
             case _:
                 raise ValueError(f"不支持的交易所: {exchange.value}")
 
@@ -948,29 +987,86 @@ class Combined(StrategyTemplate):
         pre_close = data['future_preClosePrice']
         pre_settlement = data['future_pre_settlement_price']
 
+        # 对于认购合约 Call
         if option_type == OptionType.CALL:
-            return (last_price > 1.015 * pre_close or
-                    ((last_price / pre_settlement) - 1) > (((data['future_upperLimit'] / pre_settlement) - 1) / 2) or
-                    (last_price > data['y_high'] and last_price > data['by_high'] and (last_price > 1.005 * pre_close or last_price > 1.005 * open_price)))
+            return (
+                last_price > 1.015 * pre_close
+                or
+                ((last_price / pre_settlement) - 1) > (((data['future_upperLimit'] / pre_settlement) - 1) / 2)
+                or
+                (
+                    last_price > data['y_high']
+                    and
+                    last_price > data['by_high']
+                    and
+                    (
+                        last_price > 1.005 * pre_close
+                        or
+                        last_price > 1.005 * open_price
+                    )
+                )
+            )
+        
+        # 对于认沽合约 Put
         elif option_type == OptionType.PUT:
-            return (last_price < 0.985 * pre_close or
-                    ((last_price / pre_settlement) - 1) < (((data['future_lowerLimit'] / pre_settlement) - 1) / 2) or
-                    (last_price < data['y_low'] and last_price < data['by_low'] and (last_price < 0.995 * pre_close or last_price < 0.995 * open_price)))
+            return (
+                last_price < 0.985 * pre_close
+                or
+                ((last_price / pre_settlement) - 1) < (((data['future_lowerLimit'] / pre_settlement) - 1) / 2)
+                or
+                (
+                    last_price < data['y_low']
+                    and
+                    last_price < data['by_low']
+                    and
+                    (
+                        last_price < 0.995 * pre_close
+                        or
+                        last_price < 0.995 * open_price
+                    )
+                )
+            )
+        
+        # 对于其他情况(实际不存在, 写在这里只是为了程序逻辑的完整性)
         else:
             return False
 
     @staticmethod
     def check_option_condition(data: dict) -> bool:
+        
+        # 如果合约的剩余交易日小于等于5天
         if data['remaining_trading_days'] <= 5:
-            return (data['option_askPrice1'] - data['option_bidPrice1'] < 5 * data['price_tick'] and
-                    data['close_signal'] and
-                    data['option_volume'] > 15 and 
-                    ((data['option_type'] == OptionType.CALL and data['strike_price'] < ((data['future_upperLimit'] / data['future_pre_settlement_price']) + 0.03) * data['future_lastPrice'])
-                     or (data['option_type'] == OptionType.PUT and data['strike_price'] > ((data['future_lowerLimit'] / data['future_pre_settlement_price']) - 0.03) * data['future_lastPrice'])))
+            return (
+                data['option_askPrice1'] - data['option_bidPrice1'] < 5 * data['price_tick']
+                and
+                data['close_signal']
+                and
+                data['option_volume'] > 15
+                and 
+                (
+                    (
+                        data['option_type'] == OptionType.CALL
+                        and
+                        data['strike_price'] < ((data['future_upperLimit'] / data['future_pre_settlement_price']) + 0.03) * data['future_lastPrice']
+                    )
+                    or
+                    (
+                        data['option_type'] == OptionType.PUT
+                        and
+                        data['strike_price'] > ((data['future_lowerLimit'] / data['future_pre_settlement_price']) - 0.03) * data['future_lastPrice']
+                    )
+                )
+            )
+        
+        # 否则...
         else:
-            return (data['option_askPrice1'] - data['option_bidPrice1'] < 5 * data['price_tick'] and
-                    data['close_signal'] and
-                    data['option_volume'] > 15)
+            return (
+                data['option_askPrice1'] - data['option_bidPrice1'] < 5 * data['price_tick']
+                and
+                data['close_signal']
+                and
+                data['option_volume'] > 15
+            )
 
     def cancel_orders_before_risk_ctrl(self, results_dict: dict[str, dict]) -> None:
         """
@@ -1008,16 +1104,16 @@ class Combined(StrategyTemplate):
                 ):
                     self.write_log(f"风控前撤单 请求撤单 {self.generate_order_info_string_from_series(row)}")
                     self.cancel_order_by_sysid(ordersysid)
-                    self.order_info.loc[self.order_info['ordersysid'] == ordersysid, 'status'] = Status.CANCELLED  # FIXME 要留着吗? 实际上要等  on_order 更新才是真的撤单
+                    self.order_info.loc[self.order_info['ordersysid'] == ordersysid, 'status'] = Status.CANCELLED  # FIXME 要留着吗? 实际上要等 on_order 更新才是真的撤单
             except Exception:
                 self.write_log(f"再风控时遇到错误 ({vt_symbol}) {traceback.format_exc()}")
 
-    def cancel_wrong_orders(self, results_dict: dict[str, dict]) -> None:
-        """开仓前风控"""
+    def cancel_orders_in_risk(self, results_dict: dict[str, dict]) -> None:
+        """开仓前撤掉符合风控条件的未成交卖出开仓单"""
         open_order = self.order_info[
-            (self.order_info['offset'] == Offset.OPEN) &
-            (self.order_info['status'] == Status.NOTTRADED) &
-            (self.order_info['direction'] == Direction.SHORT)
+            (self.order_info['offset'] == Offset.OPEN) &  # 订单是开仓
+            (self.order_info['status'] == Status.NOTTRADED) &  # 订单还未成交
+            (self.order_info['direction'] == Direction.SHORT)  # 订单是空(卖出)
         ]
 
         for _, row in open_order.drop_duplicates().iterrows():
@@ -1037,10 +1133,10 @@ class Combined(StrategyTemplate):
                     self.check_future_condition(data, option_type) and
                     self.check_option_condition(data)
                 ):
-                    self.write_log(f"开仓前风控 请求撤单 {self.generate_order_info_string_from_series(row)}")
+                    self.write_log(f"开仓前撤单 请求撤单 {self.generate_order_info_string_from_series(row)}")
                     self.cancel_order_by_sysid(ordersysid)
             except Exception:
-                self.write_log(f"开仓前风控时遇到错误 {self.generate_order_info_string_from_series(row)}")
+                self.write_log(f"开仓前撤单时遇到错误 {self.generate_order_info_string_from_series(row)}")
 
     @staticmethod
     def split_volume(max_volume: int, total_volume: int) -> list[int]:
@@ -1286,24 +1382,34 @@ class Combined(StrategyTemplate):
         lower_price = data['future_lowerLimit']  # 期货跌停价
 
         if option_type == OptionType.CALL and last_price < 1.03 * upper_price:  # 认购合约，且标的期货价格在1.03倍涨停价以下
-            return ((low_price <= 0.98 * open_price) and
-                    (last_price > low_price + 0.618 * (open_price - low_price)) and
-                    (last_price > 0.99 * pre_close))
+            return (
+                (low_price <= 0.98 * open_price)
+                and
+                (last_price > low_price + 0.618 * (open_price - low_price))
+                and
+                (last_price > 0.99 * pre_close)
+            )
         elif option_type == OptionType.PUT and last_price > 0.97 * lower_price:  # 认沽合约，且标的期货价格在0.97倍跌停价以上
-            return ((high_price >= 1.02 * open_price) and
-                    (last_price < high_price - 0.618 * (high_price - open_price)) and
-                    (last_price < 1.01 * pre_close))
+            return (
+                (high_price >= 1.02 * open_price)
+                and
+                (last_price < high_price - 0.618 * (high_price - open_price))
+                and
+                (last_price < 1.01 * pre_close)
+            )
         else:
             return False
 
     def close_positions_for_AV(self, results_dict: dict[str, dict]) -> None:
         """AV型走势平仓"""
         # 筛选出止盈单 (即 非风控单/非特别单/手动单)
-        matched_order_info: DataFrame = self.order_info[(self.order_info['offset'].isin([Offset.CLOSE, Offset.CLOSETODAY, Offset.CLOSEYESTERDAY])) &
-                                       (self.order_info['status'].isin([Status.NOTTRADED])) &
-                                       (self.order_info['direction'] == Direction.LONG) &
-                                       (~self.order_info['memo'].str.contains('RiskCtrl')) &
-                                       (~self.order_info['memo'].str.contains('Special'))]
+        matched_order_info: DataFrame = self.order_info[
+            (self.order_info['offset'].isin([Offset.CLOSE, Offset.CLOSETODAY, Offset.CLOSEYESTERDAY])) &  # 订单是平仓、平今、平昨
+            (self.order_info['status'].isin([Status.NOTTRADED])) &  # 订单还未成交
+            (self.order_info['direction'] == Direction.LONG) &  # 订单是多（买入）
+            (~self.order_info['memo'].str.contains('RiskCtrl')) &  # 订单不是风控单
+            (~self.order_info['memo'].str.contains('Special'))  # 订单不是特别单（目前只有AV走势特别平仓时会加上这个 Memo）
+        ]
 
         for _, row in matched_order_info.drop_duplicates().iterrows():
             vt_symbol: str = row['vt_symbol']
@@ -1444,17 +1550,37 @@ class Combined(StrategyTemplate):
         return pd.to_datetime(dt) if dt else pd.NaT
             
     def get_offset_converter(self) -> OffsetConverter:
-        """获取开平转换器"""
+        """
+        获取开平转换器(OffsetConverter).
+        
+        不要被“开平转换器”这个名字误导了，这个实例在这个策略里就是用来获取持仓信息的.
+        这个跟 self.main_engine.get_all_positions() 获取到的持仓信息的区别就是这个更加的实时.
+        例如它可以在程序收到交易所的订单回报的第一时间就更新程序内部的持仓信息 (如我们用到的可平量).
+        这个对于我们进行"撤单, 放出可平量, 再根据可平量发相应手数的平仓单"的逻辑非常重要.
+        
+        如果只用 self.main_engine.get_all_positions() 获取持仓信息和可平量, 会遇到的问题就是,
+        当发出撤单请求后, 可平量不会立马反映在 self.main_engine.get_all_positions(), 也就是不会立马空出来,
+        因为其一柜台返回的持仓信息是有延迟的, 其二 self.main_engine.get_all_positions() 是每几秒定时更新.
+        
+        从本质上说:
+        1. OffsetConverter 是 vnpy 内部用来实现自动平仓逻辑的工具类
+        2. 例如程序在对上期所和能源所进行平仓时, 会先看是否有平今量, 如果有就发出平今指令而平仓(或平昨)指令
+        3. 看持仓是否有平今量和平昨量, 需要程序本身自己去追踪订单信息, 结合返回的持仓信息动态计算得出
+        """
         gateway_name: str | None = self.gateway_name
         if not gateway_name:
-            raise Exception("Gateway name is not set.")
+            raise Exception("self.gateway_name 还未赋值，是否在首次 on_tick 回调中成功赋值了 self.gateway_name?")
         offset_converter: OffsetConverter | None = self.main_engine.get_converter(gateway_name)
         if not offset_converter:
-            raise Exception("Converter not found for gateway: {gateway_name}")
+            raise Exception("未找到 {gateway_name} 对应的 OffsetConverter")
         return offset_converter
 
     def get_position_holding(self, vt_symbol: str) -> PositionHolding:
-        """获取实时持仓信息"""
+        """
+        获取实时持仓信息.
+        
+        这里的"实时"体现在持仓的可平量会根据收到的订单回报(未成交)在第一时间更新(早于策略去读取可平量之前).
+        """
         offset_converter: OffsetConverter = self.get_offset_converter()
         position_holding: PositionHolding | None = offset_converter.get_position_holding(vt_symbol)
         if not position_holding:
