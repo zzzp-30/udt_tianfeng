@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 import akshare as ak  # 从akshare数据库中获取期货历史数据
 import pandas as pd
 import numpy as np
-from line_profiler import profile
 from pandas import DataFrame, DatetimeIndex, Series, Timedelta, Timestamp
 
 from vnpy.trader.constant import (Direction, Exchange, Offset, OptionType,
@@ -142,7 +141,10 @@ class LoopRiskCtrlOperation:  # FIXME 更好的类命名, LoopRiskCtrlOperation
 
 
 class MacdStrategy(StrategyTemplate):
-    """"""
+    """
+    20250616 卖方跟随策略。
+    """
+    
     author = "Minghao Guan & Zheyin Zeng"
     fast_period = 12
     slow_period = 26
@@ -175,7 +177,7 @@ class MacdStrategy(StrategyTemplate):
         self.volume_per_open_position: int = 1  # 每次开仓时交易的合约数量
         self.max_open_position_volume_in_total: int = 10  # 每次启动程序最多交易的合约数量
         self.max_open_position_volume_per_contract: int = 1  # 每次开仓每个合约最多交易的数量
-        self.loop_risk_ctrl_cooldown: int = 40  # 同个报单两个循环风控的最小间隔, 单位: 秒
+        self.loop_risk_ctrl_cooldown: int = 30  # 同个报单两个循环风控的最小间隔, 单位: 秒
         
         # --- 策略状态 ---
         
@@ -333,15 +335,20 @@ class MacdStrategy(StrategyTemplate):
         
         # 转换列类型以提高处理速度
         self.results = self.results.astype(self.results_cols)
-
-        # 创建每个合约的ArrayManager
+    
+        # 创建每个期货合约的ArrayManager
         self.ams: dict[str, ArrayManager] = {}
         for future_vt_symbol in self.future_vt_symbols:
-            self.ams[future_vt_symbol] = ArrayManager()
+            self.ams[future_vt_symbol] = ArrayManager(size=2)  # FIXME size=2 只是用于测试，正式使用时需要去掉
 
-        self.pbg = PortfolioBarGenerator(self.on_bars, 5, self.on_5minute_bars, Interval.MINUTE)
-        # 加载2天的历史数据
-        # self.load_bars(2, Interval.MINUTE)
+        self.pbg = PortfolioBarGenerator(self.on_bars, 1, self.on_5minute_bars, Interval.MINUTE)
+        # 加载近2天的1分钟K线数据
+        # 按照目前的设计, 这会从本地数据库调取历史数据
+        # 因此请确保本地数据库正常运行, 以及本地数据库有足够的历史数据
+        #
+        # FIXME 这里指定的时间区间会将非交易日也考虑进去。也就是说按照正常的交易时间，如果周一运行策略，获取前两天的历史行情，那么是在获取周六周日的历史行情。而周六周日没有历史行情，所以周一在获取数据时就没有数据。
+        # 我们的数据库只存了1分钟K线，所以这里的 interval 只能用 Interval.MINUTE (1m)
+        self.load_bars(days=2, interval=Interval.MINUTE)
             
     ############################################################
     # 初始化逻辑 - 开始
@@ -361,8 +368,10 @@ class MacdStrategy(StrategyTemplate):
         # 收集特定 ContractData 的字典形式的数据
         for contract in all_contracts:
             if (
-                contract.product == Product.OPTION and
-                contract.exchange in exchange_list and
+                contract.product == Product.OPTION
+                and
+                contract.exchange in exchange_list
+                and
                 contract.option_portfolio in target_products  # 只选择指定品种的期权
             ):
                 all_contract_dict_list.append({
@@ -400,7 +409,6 @@ class MacdStrategy(StrategyTemplate):
         
         return len(business_days)
 
-    @profile
     def process_results(self) -> None:
         """计算剩余交易日，筛选剩余交易日最少的两个的合约"""
         
@@ -431,7 +439,6 @@ class MacdStrategy(StrategyTemplate):
         # 添加历史数据到 self.results
         self.add_historical_data()
 
-    @profile
     def add_historical_data(self) -> None:
         """添加历史数据"""
         # 从 AkShare 获取所有交易日
@@ -494,7 +501,6 @@ class MacdStrategy(StrategyTemplate):
         self.results = pd.merge(self.results, combined_by_data, on='underlying_symbol', how='left')
         self.results = pd.merge(self.results, combined_y_data, on='underlying_symbol', how='left')
 
-    @profile
     def subscribe_vt_symbols(self) -> None:
         """订阅合约"""
         option_vt_symbols = self.results['vt_symbol'].unique().tolist()
@@ -522,6 +528,7 @@ class MacdStrategy(StrategyTemplate):
 
     def on_tick(self, tick: TickData) -> None:
         """处理 tick 数据"""
+        # 更新K线合成器的状态
         vt_symbol = tick.vt_symbol
 
         if vt_symbol in self.option_vt_symbols:
@@ -689,10 +696,10 @@ class MacdStrategy(StrategyTemplate):
                 filtered = group[condition]
 
                 target = []
-                # 优先选择 date_rank == 1 的合约
+                # 优先选择 date_rank == 1(当月) 的合约
                 selected = filtered[filtered['date_rank'] == 1]
 
-                # 如果没有找到，再尝试选择 date_rank == 2 的合约
+                # 如果没有找到，再尝试选择 date_rank == 2(次月) 的合约
                 if selected.empty:
                     selected = filtered[filtered['date_rank'] == 2]
 
@@ -813,7 +820,7 @@ class MacdStrategy(StrategyTemplate):
                 # 如果没有持仓则允许开仓
                 self.open_option_price.get(row['vt_symbol'], 0) == 0
                 or 
-                # 如果有持仓则且当前买一价低于上一次开仓的价格减去 10 ticks，则允许开仓
+                # TODO 如果有持仓则且当前买一价低于上一次开仓的价格减去 10 ticks，则允许开仓
                 row['option_bidPrice1'] < (self.open_option_price[row['vt_symbol']] - 10 * row['price_tick'])
             )
             and
@@ -1006,7 +1013,7 @@ class MacdStrategy(StrategyTemplate):
                 vt_symbol = close.vt_symbol
                 close_available_volume = int(close.volume - close.frozen)
 
-                if vt_symbol not in results_dict or vt_symbol not in self.open_option_price.keys():
+                if vt_symbol not in results_dict or vt_symbol not in self.open_option_price.keys():  # TODO 持久化 open_option_price
                     continue
 
                 try:
@@ -1248,17 +1255,22 @@ class MacdStrategy(StrategyTemplate):
                 return
             
             _, _, self.macd_data[vt_underlying_symbol] = am.macd(self.fast_period, self.slow_period, self.signal_period) # type: ignore
-            
+
             # 获取最近5根5分钟K线的新高
             high_prices: np.ndarray = am.high_array[-5:]
+            low_prices: np.ndarray = am.low_array[-5:]
 
             self.twenty_five_min_high[vt_underlying_symbol] = high_prices.max()
-            self.twenty_five_min_low[vt_underlying_symbol] = high_prices.min()
-            
-            self.write_log(f"5分钟K线更新 {vt_underlying_symbol} {bar.datetime} price={bar.close_price} macd={self.macd_data[vt_underlying_symbol]} high={self.twenty_five_min_high[vt_underlying_symbol]} low={self.twenty_five_min_low[vt_underlying_symbol]}")
+            self.twenty_five_min_low[vt_underlying_symbol] = low_prices.min()
 
+        self.write_log(f"五分钟K线回调: {len(bars)} 个合约")
+        for vt_symbol, bar in bars.items():
+            self.write_log(f"五分钟K线回调(第一个): {vt_symbol} -> {bar}")
+            break
+        
         # 推送界面更新
         self.put_event()
+
     def on_trade(self, trade: TradeData) -> None:
         """处理成交更新"""
         self.write_log(f"成交信息更新 {self.generate_trade_info_string_from_trade_data(trade)}")
