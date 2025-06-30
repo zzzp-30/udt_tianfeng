@@ -6,60 +6,15 @@ from logging import DEBUG, INFO
 from pathlib import Path
 from time import sleep
 
+import akshare as ak
+import pandas as pd
 from vnpy.trader.engine import EventEngine, MainEngine, OmsEngine
 from vnpy.trader.object import AccountData, OrderData, PositionData, TradeData
 from vnpy.trader.setting import SETTINGS
+from vnpy.trader.utility import get_file_path
 from vnpy_ctp import CtpGateway
 from vnpy_simplestrategy import SimpleStrategyApp, StrategyEngine
-# from vnpy_tts import TtsGateway
 
-# SimNow 仿真 (周末/节假日完全无法访问)
-# ctp_setting = {
-#     "用户名": "242558",  # 这里用的 SimNow 提供的模拟接口: https://www.simnow.com.cn/product.action
-#     "密码": "787390@aaa",
-#     "经纪商代码": "9999",
-#     "交易服务器": "180.168.146.187:10201",
-#     "行情服务器": "180.168.146.187:10211",
-#     "产品名称": "simnow_client_test",
-#     "授权编码": "0000000000000000",
-#     "产品信息": "www"
-# }
-
-# SimNow 7*24
-# ctp_setting = {
-#     "用户名": "242558",  # 这里用的 SimNow 提供的模拟接口: https://www.simnow.com.cn/product.action
-#     "密码": "787390@aaa",
-#     "经纪商代码": "9999",
-#     "交易服务器": "180.168.146.187:10130",
-#     "行情服务器": "180.168.146.187:10131",
-#     "产品名称": "simnow_client_test",
-#     "授权编码": "0000000000000000",
-#     "产品信息": "www"
-# }
-
-# TTS 7*24
-# ctp_setting = {
-#     "用户名": "12821",
-#     "密码": "123456",
-#     "经纪商代码": "",
-#     "交易服务器": "121.37.80.177:20002",
-#     "行情服务器": "121.37.80.177:20004",
-#     "产品名称": "",
-#     "授权编码": "",
-#     "产品信息": ""
-# }
-
-# TTS 仿真
-# ctp_setting = {
-#     "用户名": "12478",
-#     "密码": "123456",
-#     "经纪商代码": "",
-#     "交易服务器": "121.37.90.193:20002",
-#     "行情服务器": "121.37.80.177:20004",  # TTS 仿真的行情服务器与 7*24 是共享的
-#     "产品名称": "",
-#     "授权编码": "",
-#     "产品信息": ""
-# }
 
 # 紫金天风 实盘
 ctp_setting = {
@@ -82,21 +37,66 @@ NIGHT_START = time(20, 45)
 NIGHT_END = time(2, 45)
 
 
+def get_trading_days() -> pd.DataFrame:
+    """获取交易日数据，优先从本地文件读取，不存在则从AkShare获取"""
+    trading_days_file_path: Path = get_file_path("trading_days.csv")
+    
+    # 检查文件是否存在且未过期
+    if trading_days_file_path.exists():
+        try:
+            file_mtime: float = trading_days_file_path.stat().st_mtime
+            current_time: float = datetime.now().timestamp()
+            
+            # 如果文件未过期(6小时内)，直接读取
+            diff: float = current_time - file_mtime
+            if diff <= 6 * 60 * 60:
+                df: pd.DataFrame = pd.read_csv(trading_days_file_path)
+                return df
+        except Exception:
+            pass
+    
+    # 文件不存在或已过期，从AkShare获取数据
+    try:
+        df = ak.tool_trade_date_hist_sina()
+        df.to_csv(trading_days_file_path, index=False)
+        return df
+    except Exception as e:
+        print(f"获取交易日数据失败: {e}")
+        return pd.DataFrame()
+
+def is_trading_day() -> bool:
+    """检查当前日期是否为交易日"""
+    try:
+        trading_days_df: pd.DataFrame = get_trading_days()
+        if trading_days_df.empty:
+            return True  # 如果无法获取交易日数据，默认返回True
+        
+        current_date: str = datetime.now().strftime('%Y-%m-%d')
+        trading_dates: list[str] = trading_days_df['trade_date'].astype(str).tolist()
+        
+        return current_date in trading_dates
+    except Exception as e:
+        print(f"检查交易日失败: {e}")
+        return True  # 出错时默认返回True
+
 def check_trading_period() -> bool:
-    """"""
-    current_time = datetime.now().time()
-
-    trading = False
-    if (
-        (current_time >= DAY_START and current_time <= DAY_END)
-        or (current_time >= NIGHT_START)
-        or (current_time <= NIGHT_END)
-    ):
-        trading = True
-
+    """检查是否在交易时间段内且为交易日"""
+    # 首先检查是否为交易日
+    if not is_trading_day():
+        return False
+    
+    current_time: time = datetime.now().time()
+    
+    # 检查是否在交易时间段内
+    is_day_trading: bool = DAY_START <= current_time <= DAY_END
+    is_night_trading: bool = current_time >= NIGHT_START or current_time <= NIGHT_END
+    
     # return True  # 适配 7*24
-    return trading
+    return is_day_trading or is_night_trading
 
+# TODO 如果父进程，子进程都在运行，支持 Ctrl-C 正常中断子进程
+#      如果父进程在运行，而子进程没在运行，按下 Ctrl-C 是终止父进程
+#      也就是说，如果父进程和子进程都在运行，要按两下 Ctrl-C 完全退出程序
 def run_child() -> None:
     """
     Running in the child process.
@@ -109,10 +109,6 @@ def run_child() -> None:
     
     # 获取订单引擎
     oms_engine: OmsEngine = main_engine.get_engine("oms") # type: ignore
-    
-    # 使用 TtsGateway
-    # main_engine.add_gateway(TtsGateway)
-    # main_gateway: TtsGateway = main_engine.get_gateway("TTS") # type: ignore
     
     # 使用 CtpGateway
     main_engine.add_gateway(CtpGateway)
@@ -178,7 +174,7 @@ def run_child() -> None:
         trading = check_trading_period()
         if not trading:
             print("关闭子进程")
-            main_engine.close()  # FIXME no attr: cancel_all
+            main_engine.close()
             sys.exit(0)
 
 def run_parent() -> None:
