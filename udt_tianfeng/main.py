@@ -181,7 +181,7 @@ def run_parent() -> None:
     """
     Running in the parent process.
     """
-    print("启动CTA策略守护父进程")
+    print("启动守护进程")
 
     child_process = None
 
