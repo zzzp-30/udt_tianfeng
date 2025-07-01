@@ -1577,25 +1577,6 @@ class Combined(StrategyTemplate):
         if not position_holding:
             raise Exception("PositionHolding not found for vt_symbol: {vt_symbol}")
         return position_holding
-
-    # TODO 需要更好的抽象, 不然将同一个策略用于不同的柜台时, 将不得不复制粘贴几乎全部的代码
-    def convert_product_to_canconinal(self, tianfeng_product: str) -> str:
-        """
-        将柜台返回的 symbol 转换为标准形式.
-        通常需要在外部数据进入到内部逻辑前就进行转换.
-        标准形式将用于策略内部的逻辑编写和数据处理.
-        
-        为什么需要这个函数?
-        因为不同柜台返回的 symbol 不尽相同, 需要进行转换.
-        比如紫金天风柜台返回的郑商所甲醇是 MA, 而标准形式是 MA_O.
-        又比如大友期货柜台返回的跟很多柜台的都不一样.
-        
-        Args:
-            tianfeng_symbol (str): 天风柜台返回的 symbol.
-        Returns:
-            str: 标准形式的 symbol.
-        """
-        return self.product_mapping_dict[tianfeng_product]
     
     def convert_order_to_df(self, order: OrderData) -> DataFrame:
         """
