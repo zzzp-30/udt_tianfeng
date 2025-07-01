@@ -142,14 +142,15 @@ class Combined(StrategyTemplate):
         }
         self.results: DataFrame = DataFrame()
         
-        # 积累的行情数据
+        # 每个期权合约的最新 tick 数据，在每次 self.on_tick() 运行时更新
         self.option_update: dict[str, dict[str, object]] = {}  # vt_symbol: 关注的期权 tick 数据
-        # 积累的每个期货合约的行情数据，在每次 on_tick() 运行时更新
+        # 每个期货合约的最新 tick 数据，在每次 self.on_tick() 运行时更新
         self.future_update: dict[str, dict[str, object]] = {}  # vt_symbol: 关注的期货 tick 数据
         
-        # 本策略订阅的合约
-        self.option_vt_symbols: set = set()
-        self.future_vt_symbols: set = set()
+        # 本策略订阅的期权合约代码
+        self.subscribed_option_vt_symbols: set[str] = set()
+        # 本策略订阅的期货合约代码
+        self.subscribed_futures_vt_symbols: set[str] = set()
         
         # 每个品种的资金占用比例
         self.fund_position: dict[str, float] = {}  # 品种: 资金占用比例 (品种是形如 'MA看涨期权' 这样的字符串, 不包含C/P, 也不包含到期日)
@@ -202,7 +203,7 @@ class Combined(StrategyTemplate):
         
         # 将投资者当前的全部订单写入 self.order_info
         all_order_data: list[OrderData] = self.main_engine.get_all_orders()
-        new_order_records = DataFrame([
+        new_order_records: DataFrame = DataFrame([
             {
                 'symbol': order.symbol,
                 'vt_symbol': order.vt_symbol,
@@ -399,15 +400,15 @@ class Combined(StrategyTemplate):
     def subscribe_vt_symbols(self) -> None:
         """订阅合约"""
         option_vt_symbols = self.results['vt_symbol'].unique().tolist()
-        future_vt_symbols = self.results['vt_underlying_symbol'].unique().tolist()
+        futures_vt_symbols = self.results['vt_underlying_symbol'].unique().tolist()
         
-        self.future_vt_symbols = set(future_vt_symbols)
-        self.option_vt_symbols = set(option_vt_symbols)
+        self.subscribed_option_vt_symbols |= set(option_vt_symbols)
+        self.subscribed_futures_vt_symbols |= set(futures_vt_symbols)
 
         # TODO 添加一个 settings 可以从外部传入参数来不订阅指定的合约
         # TODO 暂时这么写😭 未来应该改一下 vnpy_simplestrategy 模块, 使用专门的函数来订阅合约
         # 直接重写 StrategyTemplate#vt_symbols
-        self.vt_symbols = option_vt_symbols + future_vt_symbols
+        self.vt_symbols = option_vt_symbols + futures_vt_symbols
         
         self.total_instruments_num = len(self.vt_symbols)
     
@@ -431,9 +432,9 @@ class Combined(StrategyTemplate):
             
         vt_symbol = tick.vt_symbol
 
-        if vt_symbol in self.option_vt_symbols:
+        if vt_symbol in self.subscribed_option_vt_symbols:
             self.update_option_data(vt_symbol, tick)
-        elif vt_symbol in self.future_vt_symbols:
+        elif vt_symbol in self.subscribed_futures_vt_symbols:
             self.update_future_data(vt_symbol, tick)
         else:
             self.write_log(f"未订阅的合约 {vt_symbol}")
@@ -508,7 +509,7 @@ class Combined(StrategyTemplate):
         self.fund_position = {product_type: .0 for product_type in self.results['product_type'].unique()}
         
         for (vt_symbol, vt_positionid) in short_positions:
-            if vt_symbol not in self.option_vt_symbols:
+            if vt_symbol not in self.subscribed_option_vt_symbols:
                 continue
             
             contract: ContractData | None = self.main_engine.get_contract(vt_symbol)
