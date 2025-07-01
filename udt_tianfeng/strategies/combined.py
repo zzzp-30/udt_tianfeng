@@ -50,9 +50,9 @@ feishu_message_template = lambda ctx: {
 
 class Combined(StrategyTemplate):
     """
-    所谓的"主策略".
+    平常都叫这个策略为“主策略”。
     
-    TODO 想个更加具体点儿的策略名. "比较级命名"没有比较对象的话信息量太低.
+    策略逻辑包含：看时机卖出开仓，风控时买入平仓。具体向邹老师了解。
     """
     
     author = "Minghao Guan & Zheyin Zeng"
@@ -76,15 +76,16 @@ class Combined(StrategyTemplate):
             setting
         )
         
+        # 方便策略内部访问 MainEngine
         self.main_engine: MainEngine = self.strategy_engine.main_engine
         
         # --- 策略参数 ---
         
         self.investor: str = ''  # TODO 每个策略应该对应一个投资者账号, 之后会用到
-        self.volume_per_open_position: int = 1  # 每次开仓时交易的合约数量
-        self.max_open_position_volume_in_total: int = 10  # 每次启动程序最多交易的合约数量
-        self.max_open_position_volume_per_contract: int = 1  # 每次启动程序每个合约最多交易的数量
-        self.loop_risk_ctrl_cooldown: int = 40  # 同个报单两个循环风控的最小间隔, 单位: 秒
+        self.volume_per_open_position: int = 1  # 每次开仓时交易的合约数量（合约张数）
+        self.max_open_position_volume_in_total: int = 10  # 每次启动程序最多交易的合约数量（合约张数）
+        self.max_open_position_volume_per_contract: int = 1  # 每次启动程序每个合约最多交易的数量（合约张数）
+        self.loop_risk_ctrl_cooldown: int = 40  # 同个报单两个循环风控之间的最小间隔, 单位: 秒
         
         # --- 策略状态 ---
         
@@ -145,6 +146,7 @@ class Combined(StrategyTemplate):
         
         # 积累的行情数据
         self.option_update: dict[str, dict[str, object]] = {}  # vt_symbol: 关注的期权 tick 数据
+        # 积累的每个期货合约的行情数据，在每次 on_tick() 运行时更新
         self.future_update: dict[str, dict[str, object]] = {}  # vt_symbol: 关注的期货 tick 数据
         
         # 本策略订阅的合约
@@ -154,7 +156,7 @@ class Combined(StrategyTemplate):
         # 每个品种的资金占用比例
         self.fund_position: dict[str, float] = {}  # 品种: 资金占用比例 (品种是形如 'MA看涨期权' 这样的字符串, 不包含C/P, 也不包含到期日)
         
-        # 积累的订单信息
+        # 积累的订单信息，在每次 self.on_order() 运行时更新
         self.order_info_cols: dict[str, str] = {
             # 以下列是通用的
             "symbol": 'string',
@@ -297,9 +299,7 @@ class Combined(StrategyTemplate):
         self.results['remaining_trading_days'] = self.results['expire_date'].apply(self.calculate_remaining_trading_days)
         
         # 读取每个品种的固定参数, 详见这里读取的文件  # FIXME 新品种需要手动加入到这个表格. 如果新品种不存在于这个表格, 则新品种将缺失对应的交易时间等固定参数
-        # 这里使用了方便函数 get_file_path 来获取完整的文件路径
-        # 确保文件在 udt/data 文件夹里就可以只写文件名来读取文件
-        # 省去指定完整文件路径的麻烦
+        # 这里使用了方便函数 get_file_path() 来获取完整的文件路径，确保文件在 udt_tianfeng/data 文件夹里就可以只写文件名来读取文件，省去指定完整文件路径的麻烦
         params: DataFrame = pd.read_excel(get_file_path("params(GXHYTF).xlsx"))
         
         # 转换列: 转成 enum 方便后面比较
@@ -312,7 +312,8 @@ class Combined(StrategyTemplate):
         self.product_mapping_dict |= dict(zip(product_mapping['tianfeng_product'], product_mapping['canonical_product']))
         self.results['product'] = self.results['product'].map(self.product_mapping_dict).fillna(self.results['product'])
         
-        # 将固定参数 params LEFT JOIN 到 self.results
+        # 将固定参数(Excel表格) LEFT JOIN 到 self.results
+        # 关于什么是 LEFT JOIN，短视频搜索 SQL LEFT JOIN
         self.results = pd.merge(left=self.results, right=params, on=['product', 'exchange'], how='left')
         
         # 筛选出剩余交易日最少的两个合约
@@ -357,6 +358,7 @@ class Combined(StrategyTemplate):
         byd_df_list: list[DataFrame] = []
         # 昨交易日的数据...
         yd_df_list: list[DataFrame] = []
+        
         # 遍历每个交易所
         for exchange_id in self.results['exchange'].map(lambda x: x.value).unique():
             # 关注的 ak.get_futures_daily 中的列
@@ -399,6 +401,7 @@ class Combined(StrategyTemplate):
             self.results.loc[cffex_mask, 'underlying_symbol'] = self.results.loc[cffex_mask, 'underlying_symbol'].str.replace(ctp_symbol, akshare_symbol)
             self.results.loc[cffex_mask, 'vt_underlying_symbol'] = self.results.loc[cffex_mask, 'vt_underlying_symbol'].str.replace(ctp_symbol, akshare_symbol)
         
+        # 拼接 DataFrame，然后合并到 self.results
         combined_by_data: DataFrame = pd.concat(byd_df_list, ignore_index=True)
         combined_y_data: DataFrame = pd.concat(yd_df_list, ignore_index=True)
         self.results = pd.merge(self.results, combined_by_data, on='underlying_symbol', how='left')
