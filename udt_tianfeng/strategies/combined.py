@@ -1528,18 +1528,6 @@ class Combined(StrategyTemplate):
         """处理成交更新"""
         self.write_log(f"成交信息更新 {self.generate_trade_info_string_from_trade_data(trade)}")
     
-    def cancel_order_auto(self, vt_orderid: str, ordersysid: str | None = None) -> None:
-        """
-        撤销报单.
-        
-        如果 ordersysid 存在，则优先使用它进行撤单, 否则使用 vt_orderid 进行撤单.
-        """
-        # TODO 写进 StrategyTemplate
-        if ordersysid:
-            self.cancel_order_by_sysid(ordersysid)
-        else:
-            self.cancel_order(vt_orderid)
-    
     @staticmethod
     def convert_to_timestamp_or_nat(dt: datetime | None):
         """
