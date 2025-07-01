@@ -3,7 +3,7 @@ requires = ["hatchling>=1.27.0", "babel>=2.17.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "udt"
+name = "udt_tianfeng"
 version = "0.1.0"
 description = "Adventure to new framework!"
 readme = "README.md"
@@ -11,7 +11,7 @@ requires-python = ">=3.13"
 dependencies = [
     "pip",
     "ipykernel",
-    "pandas-stubs",
+    "akshare",  # AkShare 始终使用最新版，因为它本质是爬虫程序，修复类更新出的非常快
     "vnpy",
     "vnpy-akshare",
     "vnpy-ctp",
@@ -31,16 +31,9 @@ dependencies = [
 vnpy = { path = "../vnpy" }
 vnpy-akshare = { path = "../vnpy_akshare" }
 vnpy-ctp = { path = "../vnpy_ctp" }
-vnpy-ctptest = { path = "../vnpy_ctptest" }
-vnpy-datamanager = { path = "../vnpy_datamanager" }
 vnpy-mysql = { path = "../vnpy_mysql" }
-# vnpy-portfoliostrategy = { path = "../vnpy_portfoliostrategy" }
-vnpy-rpcservice = { path = "../vnpy_rpcservice" }
 vnpy-simplestrategy = { path = "../vnpy_simplestrategy" }
-vnpy-sopt = { path = "../vnpy_sopt" }
-vnpy-sopttest = { path = "../vnpy_sopttest" }
 vnpy-sqlite = { path = "../vnpy_sqlite" }
-vnpy-tts = { path = "../vnpy_tts" }
 vnpy-tushare = { path = "../vnpy_tushare" }
 
 [tool.ruff]
