@@ -859,7 +859,11 @@ class Combined(StrategyTemplate):
                             (
                                 row["future_lastPrice"] < (1 - 0.01 * coefficient) * row["future_preClosePrice"]
                                 or
-                                row["future_lastPrice"] < (1 - 0.01 * coefficient) * row["future_openPrice"]
+                                (
+                                    row["future_lastPrice"] < (1 - 0.01 * coefficient) * row["future_openPrice"]
+                                    and
+                                    row["future_lastPrice"] < row["future_preClosePrice"]
+                                )
                             )
                         )
                         or
@@ -869,7 +873,11 @@ class Combined(StrategyTemplate):
                             (
                                 row["future_lastPrice"] > (1 + 0.01 * coefficient) * row["future_preClosePrice"]
                                 or
-                                row["future_lastPrice"] > (1 + 0.01 * coefficient) * row["future_openPrice"]
+                                (
+                                    row["future_lastPrice"] > (1 + 0.01 * coefficient) * row["future_openPrice"]
+                                    and
+                                    row["future_lastPrice"] > row["future_preClosePrice"]
+                                )
                             )
                         )
                     )
