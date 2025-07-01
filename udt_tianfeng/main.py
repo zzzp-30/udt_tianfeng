@@ -91,7 +91,7 @@ def check_trading_period() -> bool:
     is_day_trading: bool = DAY_START <= current_time <= DAY_END
     is_night_trading: bool = current_time >= NIGHT_START or current_time <= NIGHT_END
     
-    # return True  # 适配 7*24
+    # return True  # 适配 7*24，把这行注释去掉的话，交易策略 7*24 小时都会保持运行
     return is_day_trading or is_night_trading
 
 # TODO 如果父进程，子进程都在运行，支持 Ctrl-C 正常中断子进程
