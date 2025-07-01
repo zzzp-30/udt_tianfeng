@@ -102,8 +102,6 @@ class Combined(StrategyTemplate):
         self.order_count: int = 0
         # 由 self.on_tick 无条件递增, 当达到订阅的合约数量时, 执行一次交易逻辑
         self.updated_count: int = 0
-        # 来自柜台的品种代码 到 标准品种代码 的映射. 不同柜台(或者不同投资者账号)的映射有所不同
-        self.product_mapping_dict: dict[str, str] = {}
         # 每个合约的参数和状态, 包括期权和期货
         self.results_cols: dict[str, str] = {
             # 这些字段来自 self.main_engine.get_all_contracts()
@@ -305,12 +303,8 @@ class Combined(StrategyTemplate):
         # 转换列: 转成 enum 方便后面比较
         params['exchange'] = params['exchange'].map(Exchange)
         
-        # 将 self.results 中的 product 转换为 canonical_product
-        # 具体的映射关系请直接参考这里加载的 product_mapping.csv 文件
-        # 不同柜台返回的 product 不尽相同, 转换成标准格式以方便执行后续算法
-        product_mapping: DataFrame = pd.read_csv(get_file_path("product_mapping.csv"), encoding='utf-8', dtype={'exchange': 'str', 'canonical_product': 'str', 'tianfeng_product': 'str'})
-        self.product_mapping_dict |= dict(zip(product_mapping['tianfeng_product'], product_mapping['canonical_product']))
-        self.results['product'] = self.results['product'].map(self.product_mapping_dict).fillna(self.results['product'])
+        # 修正 self.results 中的 product
+        self.results['product'] = self.results['product'].map(self.fix_product).fillna(self.results['product'])
         
         # 将固定参数(Excel表格) LEFT JOIN 到 self.results
         # 关于什么是 LEFT JOIN，短视频搜索 SQL LEFT JOIN
@@ -376,8 +370,12 @@ class Combined(StrategyTemplate):
                 yd_df = ak.get_futures_daily(start_date=yd_trade_date_str, end_date=yd_trade_date_str, market=exchange_id)
             except Exception:
                 self.write_log(f"从 AkShare 获取历史数据失败 ({exchange_id}) {traceback.format_exc()}")
-            # 特别处理 SHFE, INE, GFEX
-            if exchange_id == (Exchange.SHFE.value or Exchange.INE.value or Exchange.GFEX.value):
+            # 特别处理 SHFE, INE, GFEX 这几个交易所返回的数据，具体逻辑如下：
+            # 我们使用 ak.get_futures_daily 获取历史行情，ak 是直接从交易所官网爬取的数据
+            # 而 SHFE, INE, GFEX 这几个交易所官网的数据中，合约代码都是 *大写* 的
+            # 这与我们从 CTP 获取的合约信息中的代码不一致，CTP 的是 *小写* 的
+            # 所以我们以 CTP 为基准，将从 AkShare 返回的数据转换成小写
+            if exchange_id in {Exchange.SHFE.value, Exchange.INE.value, Exchange.GFEX.value}:
                 byd_df['symbol'] = byd_df['symbol'].str.lower()
                 yd_df['symbol'] = yd_df['symbol'].str.lower()
             # 重命名列以准备合并到 self.results
@@ -387,19 +385,10 @@ class Combined(StrategyTemplate):
             byd_df_list.append(byd_df)
             yd_df_list.append(yd_df)
 
-        # Note: 以下代码用于修正中金所返回的错误
-        #
-        # 加载中金所期权代码映射表
-        cffex_option_symbol_fix: DataFrame = pd.read_csv(get_file_path("cffex_option_symbol_fix.csv"), encoding='utf-8')
-        # 创建映射字典：ctp_underlying_product -> akshare_underlying_product
-        symbol_mapping = dict(zip(cffex_option_symbol_fix['ctp_underlying_product'], cffex_option_symbol_fix['akshare_underlying_product']))
-        # 筛选出中金所的行
+        # 以下代码用于修正从 CTP 返回的 CFFEX 的期权标的代码
         cffex_mask = self.results['exchange'] == Exchange.CFFEX
-        # 应用映射到 underlying_symbol, vt_underlying_symbol
-        for ctp_symbol, akshare_symbol in symbol_mapping.items():
-            # TODO 检查还有没有漏掉的没有修正的
-            self.results.loc[cffex_mask, 'underlying_symbol'] = self.results.loc[cffex_mask, 'underlying_symbol'].str.replace(ctp_symbol, akshare_symbol)
-            self.results.loc[cffex_mask, 'vt_underlying_symbol'] = self.results.loc[cffex_mask, 'vt_underlying_symbol'].str.replace(ctp_symbol, akshare_symbol)
+        self.results.loc[cffex_mask, 'underlying_symbol'] = self.results.loc[cffex_mask, 'underlying_symbol'].map(self.fix_cffex_underlying)
+        self.results.loc[cffex_mask, 'vt_underlying_symbol'] = self.results.loc[cffex_mask, 'vt_underlying_symbol'].map(self.fix_cffex_underlying)
         
         # 拼接 DataFrame，然后合并到 self.results
         combined_by_data: DataFrame = pd.concat(byd_df_list, ignore_index=True)
@@ -536,15 +525,17 @@ class Combined(StrategyTemplate):
                 raise ValueError(f"合约 {vt_symbol} 的期权类型信息缺失")
             
             symbol, exchange = extract_vt_symbol(vt_symbol)
-            product = self.convert_product_to_canconinal(option_portfolio)  # 品种, 例如 lc2508-C-94000 就是 "lc_o"
+            product = self.fix_product(option_portfolio)  # 品种, 例如 lc2508-C-94000 就是 "lc_o"
             product_type: str
             match exchange:
                 case Exchange.CFFEX:
-                    # 品种 + 期权类型 + 标的
-                    product_type = product + option_type.value + contract.option_underlying
+                    # 品种 + 期权类型 + 标的, 例如 MO看跌期权IM2507
+                    product_type = product + option_type.value + self.fix_cffex_underlying(contract.option_underlying)
                 case Exchange.CZCE | Exchange.DCE | Exchange.SHFE | Exchange.INE | Exchange.GFEX:
                     # 品种 + 期权类型, 例如 lc2508-C-94000 就是 "lc_o看跌期权"
                     product_type = product + option_type.value
+                case _:
+                    raise ValueError(f"不支持的交易所: {exchange.value}")
             percent = self.cal_fund_tie(vt_positionid)
             self.fund_position[product_type] += percent
 
@@ -1715,6 +1706,79 @@ class Combined(StrategyTemplate):
             f"数量={series['volume']}, "
             f"Memo={series['memo']}"
         )
+
+    # 该映射用于修复 CTP 柜台返回的品种代码
+    # Key: 从 CTP 返回的品种代码
+    # Val: 标准形式的品种代码
+    product_fix_map: dict[str, str] = {
+        # 中金所：无需修正
+        # ...
+        # 大商所：无需修正
+        # ...
+        # 郑商所：需要修正，CTP柜台返回的代码不带 '_O'
+        'SR': 'SR_O',
+        'CF': 'CF_O',
+        'TA': 'TA_O',
+        'MA': 'MA_O',
+        'RM': 'RM_O',
+        'OI': 'OI_O',
+        'PK': 'PK_O',
+        'PX': 'PX_O',
+        'SH': 'SH_O',
+        'PF': 'PF_O',
+        'SA': 'SA_O',
+        'UR': 'UR_O',
+        'SM': 'SM_O',
+        'SF': 'SF_O',
+        'AP': 'AP_O',
+        'CJ': 'CJ_O',
+        'FG': 'FG_O',
+        'PR': 'PR_O',
+        # 上期所：无需修正
+        # ...
+        # 能源所：无需修正
+        # ...
+        # 广期所：无需修正
+        # ...
+    }
+    
+    def fix_product(self, broken_product: str) -> str:
+        """
+        将CTP柜台返回的品种代码转换为标准形式.
+        通常需要在外部数据进入到内部逻辑前就进行转换.
+        标准形式将用于策略内部的逻辑编写和数据处理.
+        
+        为什么需要这个函数?
+        因为不同柜台返回的品种代码不尽相同, 需要进行转换.
+        比如紫金天风CTP柜台返回的郑商所甲醇是 MA, 而标准形式是 MA_O.
+        """
+        fixed_product: str = broken_product
+        for ctp_product, canonical_product in self.product_fix_map.items():
+            fixed_product = fixed_product.replace(ctp_product, canonical_product)
+        return fixed_product
+
+    # 该映射用于修复 CFFEX 期权标的品种代码
+    # Key: 从 CTP 返回的期权的标的品种的代码
+    # Val: 从 AkShare 返回的期权的标的品种的代码
+    cffex_underlying_fix_map: dict[str, str] = {
+        'HO': 'IH',  # HO上证50股指期权
+        'IO': 'IF',  # IO股指期权
+        'MO': 'IM',  # MO中证1000股指期权
+    }
+    
+    def fix_cffex_underlying(self, broken_underlying: str) -> str:
+        """
+        修复 CFFEX 的期权标的代码.
+        
+        Args:
+            broken_underlying (str): 错误的标的代码, 比如 MO2508 (应为 IM2508)
+        Returns:
+            str: 修复后的期权标的代码.
+        """
+        fixed_underlying: str = broken_underlying
+        for ctp_underlying_product, ak_underlying_product in self.cffex_underlying_fix_map.items():
+            fixed_underlying = fixed_underlying.replace(ctp_underlying_product, ak_underlying_product)
+        return fixed_underlying
 
 
 class LoopRiskCtrl:
