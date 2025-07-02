@@ -3,5 +3,10 @@
         "class_name": "Combined",
         "vt_symbols": [],
         "setting": {}
+    },
+    "macd": {
+        "class_name": "Macd",
+        "vt_symbols": [],
+        "setting": {}
     }
 }
