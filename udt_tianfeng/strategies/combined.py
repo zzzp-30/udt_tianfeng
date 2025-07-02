@@ -1767,12 +1767,12 @@ class LoopRiskCtrl:
     
     使用方式:
     首先, 确保在报单回调函数 (on_order) 中无条件调用 self.try_close_position.
-    也就是说, 无论是什么报单回报, 只要有新的报单回报 (OrderData), 都要传给 self.try_close_position.
-    剩下的操作就是在需要""撤单再平仓"的地方调用 self.try_cancel_order 方法, 传入一个 Op1Params 对象作为参数.
-    Op1Params 包含了撤单目标, 以及在*未来*收到撤单回报后需要被平仓的持仓参数.
+    也就是说, 无论是什么报单回报, 只要有新的报单回报 (OrderData), 都要传给 self.on_order().
+    剩下的操作就是在需要""撤单再平仓"的地方调用 self.start() 方法, 传入相应的参数即可.
+    参数包含了撤单目标, 以及在*未来*收到撤单回报后需要被平仓的持仓参数.
     
     使用效果:
-    调用 self.try_cancel_order 后, 如果策略收到了对应的撤单回报, 将自动发起既定的平仓操作.
+    调用 self.start() 后, 如果策略收到了对应的撤单回报, 将自动发起既定的平仓操作.
     """
     
     @dataclass
@@ -1788,7 +1788,7 @@ class LoopRiskCtrl:
         
     def __init__(self, strategy: "Combined") -> None:
         self.strategy: Combined = strategy
-        self.future_order_map: dict[str, list[LoopRiskCtrl.FutureOrder]] = dict()  # ordersysid: list[Op1Params]
+        self.future_order_map: dict[str, list[LoopRiskCtrl.FutureOrder]] = dict()  # ordersysid: list[LoopRiskCtrl.FutureOrder]
     
     def start(
         self,
@@ -1830,7 +1830,7 @@ class LoopRiskCtrl:
             return  # 说明该报单是由本策略发出去的, 但还未被交易所接受
         params_list: list[LoopRiskCtrl.FutureOrder] | None = self.future_order_map.get(ordersysid, None)
         if params_list is None or len(params_list) == 0:
-            return  # 说明 ordersysid 对应的报单不由 Op1 处理
+            return  # 说明 ordersysid 对应的报单不由 LoopRiskCtrl 处理
 
         # 所有检查通过, 进行平仓操作
         for params in params_list:
