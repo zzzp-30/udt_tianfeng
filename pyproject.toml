@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "udt_tianfeng"
 version = "0.1.0"
-description = "Adventure to new framework!"
+description = "用于紫金天风实盘账户的交易程序"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -13,28 +13,16 @@ dependencies = [
     "ipykernel",
     "akshare",  # AkShare 始终使用最新版，因为它本质是爬虫程序，修复类更新出的非常快
     "vnpy",
-    "vnpy-akshare",
     "vnpy-ctp",
-    "vnpy-ctptest",
     "vnpy-mysql",
-    # "vnpy-portfoliostrategy",
-    "vnpy-rpcservice",
     "vnpy-simplestrategy",
-    # "vnpy-sopt",  # C++ 编译暂时有问题
-    # "vnpy-sopttest",  # 同上
-    "vnpy-sqlite",
-    "vnpy-tts",
-    "vnpy-tushare",
 ]
 
 [tool.uv.sources]
 vnpy = { path = "../vnpy" }
-vnpy-akshare = { path = "../vnpy_akshare" }
 vnpy-ctp = { path = "../vnpy_ctp" }
 vnpy-mysql = { path = "../vnpy_mysql" }
 vnpy-simplestrategy = { path = "../vnpy_simplestrategy" }
-vnpy-sqlite = { path = "../vnpy_sqlite" }
-vnpy-tushare = { path = "../vnpy_tushare" }
 
 [tool.ruff]
 target-version = "py313"
