@@ -15,7 +15,7 @@ from vnpy.trader.constant import (Direction, Exchange, Offset, OptionType,
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.object import (CancelRequest, ContractData, OrderData, PositionData,
                                 TickData, TradeData, BarData)
-from vnpy.trader.utility import get_file_path, ArrayManager
+from vnpy.trader.utility import extract_vt_symbol, get_file_path, ArrayManager
 from vnpy.utility.cooldown import (Cooldown, CooldownMap, StackableCooldown,
                                    StackableCooldownMap)
 from vnpy_simplestrategy import StrategyEngine, StrategyTemplate
@@ -87,9 +87,9 @@ class Macd(StrategyTemplate):
         # --- 策略参数 ---
         
         self.investor: str = ''  # TODO 每个策略应该对应一个投资者账号, 之后会用到
-        self.volume_per_open_position: int = 1  # 每次开仓时交易的合约数量
-        self.max_open_position_volume_in_total: int = 10  # 每次启动程序最多交易的合约数量
-        self.max_open_position_volume_per_contract: int = 1  # 每次启动程序每个合约最多交易的数量
+        self.volume_per_open_position: int = 1  # 每次开仓时交易的合约数量（合约张数）
+        self.max_open_position_volume_in_total: int = 10  # 每次启动程序最多交易的合约数量（合约张数）
+        self.max_open_position_volume_per_contract: int = 1  # 每次启动程序每个合约最多交易的数量（合约张数）
         self.loop_risk_ctrl_cooldown: int = 30  # 同个报单两个循环风控的最小间隔, 单位: 秒
         
         # --- 策略状态 ---
@@ -105,8 +105,6 @@ class Macd(StrategyTemplate):
         self.order_count: int = 0
         # 由 self.on_tick 无条件递增, 当达到订阅的合约数量时, 执行一次交易逻辑
         self.updated_count: int = 0
-        # 来自柜台的品种代码 到 标准品种代码 的映射. 不同柜台(或者不同投资者账号)的映射有所不同
-        self.product_mapping_dict: dict[str, str] = {}
         # 每个合约的参数和状态, 包括期权和期货
         self.results_cols: dict[str, str] = {
             # 这些字段来自 self.main_engine.get_all_contracts()
@@ -130,7 +128,7 @@ class Macd(StrategyTemplate):
             'y_high': 'float64',  # Yesterday 最高价
             'y_low': 'float64',  # Yesterday 最低价
             
-            # 从表格 params.xlsx 读取到的固定参数
+            # 从表格 (params.xlsx) 读取到的固定参数
             '期货': 'string',
             'product_name': 'string',
             '可挂单': 'string',
@@ -147,16 +145,18 @@ class Macd(StrategyTemplate):
         }
         self.results: DataFrame = DataFrame()
         
-        # 积累的行情数据
+        # 每个期权合约的最新 tick 数据，在每次 self.on_tick() 运行时更新
         self.option_update: dict[str, dict[str, object]] = {}  # vt_symbol: 关注的期权 tick 数据
+        # 每个期货合约的最新 tick 数据，在每次 self.on_tick() 运行时更新
         self.future_update: dict[str, dict[str, object]] = {}  # vt_symbol: 关注的期货 tick 数据
         
         # 积累的 MACD 数据
         self.macd_data: dict[str, float] = {}
 
-        # 本策略订阅的合约
-        self.option_vt_symbols: set = set()
-        self.future_vt_symbols: set = set()
+        # 本策略订阅的期权合约代码
+        self.subscribed_option_vt_symbols: set[str] = set()
+        # 本策略订阅的期货合约代码
+        self.subscribed_futures_vt_symbols: set[str] = set()
         
         # 每个品种的资金占用比例
         self.fund_position: dict[str, float] = {}  # 品种: 资金占用比例 (品种是形如 'MA看涨期权' 这样的字符串, 不包含C/P, 也不包含到期日)
@@ -172,7 +172,8 @@ class Macd(StrategyTemplate):
         # 最近一次期权的开仓时间
         self.vt_symbol_open_time: dict[str, datetime] = {}
 
-        # 积累的订单信息
+        
+        # 积累的订单信息，在每次 self.on_order() 运行时更新
         self.order_info_cols: dict[str, str] = {
             # 以下列是通用的
             "symbol": 'string',
@@ -208,8 +209,8 @@ class Macd(StrategyTemplate):
         self.open_position_cooldown: Cooldown = Cooldown(timeout_seconds=5.0)
         # 平仓操作的冷却
         self.close_positon_cooldown: Cooldown = Cooldown(timeout_seconds=5.0)
-        # Op1 实例, 用于执行 Op1 操作, 关于什么是 Op1 操作详见 class Op1 的 docstring
-        self.op1: LoopRiskCtrlOperation = LoopRiskCtrlOperation(self)
+        # LoopRiskCtrl 实例, 用于执行循环风控操作
+        self.loop_risk_ctrl: LoopRiskCtrl = LoopRiskCtrl(self)
 
     def on_init(self) -> None:
         """策略初始化"""
@@ -237,24 +238,31 @@ class Macd(StrategyTemplate):
         self.order_info = pd.concat([self.order_info, new_order_records], ignore_index=True)
         
         # 初始化 self.results
-        # TODO 将 CFFEX 也纳入到本策略的负责范围内
+        # TODO 将 CFFEX 也纳入到本策略的负责范围内，参考 class Combined
         self.initialize_results(exchange_list=[Exchange.CZCE, Exchange.DCE, Exchange.SHFE, Exchange.INE, Exchange.GFEX])
         
-        # 订阅行情
+        # 基于 self.results 订阅行情
         self.subscribe_vt_symbols()
         
         # 构建 product_type 列, 形如: MA看涨期权, ao看跌期权
         self.results['product_type'] = self.results['product'] + self.results['option_type'].apply(lambda x: x.value)
         
-        # 转换列类型以提高处理速度
+        # 为 self.results 转换列类型以提高处理速度
         self.results = self.results.astype(self.results_cols)
     
-        # 创建每个期货合约的ArrayManager
+        # 创建每个期货合约的 ArrayManager
         self.ams: dict[str, ArrayManager] = {}
         for future_vt_symbol in self.future_vt_symbols:
-            self.ams[future_vt_symbol] = ArrayManager(size=2)  # FIXME size=2 只是用于测试，不然积累数据所花时间太久，正式使用时需要去掉
+            self.ams[future_vt_symbol] = ArrayManager()
 
-        self.pbg = PortfolioBarGenerator(self.on_bars, 1, self.on_5minute_bars, Interval.MINUTE)
+        # 组合K线合成器，接下来简称为 PBG (PortfolioBarGenerator)
+        self.pbg = PortfolioBarGenerator(
+            on_bars=self.on_bars,
+            window=1,  # FIXME 测试时用1分钟K线以提高触发频率，测试完成后改回5分钟
+            on_window_bars=self.on_5minute_bars,
+            interval=Interval.MINUTE
+        )
+        
         # 加载近2天的1分钟K线数据
         # 按照目前的设计, 这会从本地数据库调取历史数据
         # 因此请确保本地数据库正常运行, 以及本地数据库有足够的历史数据
@@ -262,7 +270,7 @@ class Macd(StrategyTemplate):
         # FIXME 这里指定的时间区间会将非交易日也考虑进去。也就是说按照正常的交易时间，如果周一运行策略，获取前两天的历史行情，那么是在获取周六周日的历史行情。而周六周日没有历史行情，所以周一在获取数据时就没有数据。
         # 我们的数据库只存了1分钟K线，所以这里的 interval 只能用 Interval.MINUTE (1m)
         self.load_bars(days=2, interval=Interval.MINUTE)
-            
+
     ############################################################
     # 初始化逻辑 - 开始
     ############################################################
@@ -275,8 +283,8 @@ class Macd(StrategyTemplate):
         # 字典形式的 ContractData, 用于构建初始的 DataFrame
         all_contract_dict_list: list[dict[str, object]] = list()
 
-        # 指定要订阅的品种
-        target_products = ["ps_o", "TA"]  # 修改为你需要的品种
+        # 指定要订阅的品种  # FIXME 测试完成后可以移除该变量，订阅所有已知合约
+        target_products = ["ps_o", "ni_o", "sn_o", "TA"]
 
         # 收集特定 ContractData 的字典形式的数据
         for contract in all_contracts:
@@ -285,7 +293,7 @@ class Macd(StrategyTemplate):
                 and
                 contract.exchange in exchange_list
                 and
-                contract.option_portfolio in target_products  # 只选择指定品种的期权
+                contract.option_portfolio in target_products  # 只选择指定品种的期权  # FIXME 测试完成后可以移除该条件，订阅所有已知合约
             ):
                 all_contract_dict_list.append({
                     # 原生字段
@@ -329,22 +337,17 @@ class Macd(StrategyTemplate):
         self.results['remaining_trading_days'] = self.results['expire_date'].apply(self.calculate_remaining_trading_days)
         
         # 读取每个品种的固定参数, 详见这里读取的文件  # FIXME 新品种需要手动加入到这个表格. 如果新品种不存在于这个表格, 则新品种将缺失对应的交易时间等固定参数
-        # 这里使用了方便函数 get_file_path 来获取完整的文件路径
-        # 确保文件在 udt_tianfeng/data 文件夹里就可以只写文件名来读取文件
-        # 省去指定完整文件路径的麻烦
+        # 这里使用了方便函数 get_file_path() 来获取完整的文件路径，确保文件在 udt_tianfeng/data 文件夹里就可以只写文件名来读取文件，省去指定完整文件路径的麻烦
         params: DataFrame = pd.read_excel(get_file_path("params(GXHYTF).xlsx"))
         
         # 转换列: 转成 enum 方便后面比较
         params['exchange'] = params['exchange'].map(Exchange)
         
-        # 将 self.results 中的 product 转换为 canonical_product
-        # 具体的映射关系请直接参考这里加载的 product_mapping.csv 文件
-        # 不同柜台返回的 product 不尽相同, 转换成标准格式以方便执行后续算法
-        product_mapping: DataFrame = pd.read_csv(get_file_path("product_mapping.csv"), encoding='utf-8', dtype={'exchange': 'str', 'canonical_product': 'str', 'tianfeng_product': 'str'})
-        self.product_mapping_dict |= dict(zip(product_mapping['tianfeng_product'], product_mapping['canonical_product']))
-        self.results['product'] = self.results['product'].map(self.product_mapping_dict).fillna(self.results['product'])
+        # 修正 self.results 中的 product
+        self.results['product'] = self.results['product'].map(self.fix_product).fillna(self.results['product'])
         
-        # 将固定参数 params LEFT JOIN 到 self.results
+        # 将固定参数(Excel表格) LEFT JOIN 到 self.results
+        # 关于什么是 LEFT JOIN，短视频搜索 SQL LEFT JOIN
         self.results = pd.merge(left=self.results, right=params, on=['product', 'exchange'], how='left')
         
         # 筛选出剩余交易日最少的两个合约
@@ -357,7 +360,7 @@ class Macd(StrategyTemplate):
     def add_historical_data(self) -> None:
         """
         添加历史数据
-
+        
         获取每个合约的上个和上上个交易日的结算价, 并把它添加到 self.results 中.
         目前的实现采用 AkShare 来获取历史数据, 数据源直接来自交易所 (ak.get_futures_daily),
         并且就算不更新 AkShare 这个库, 从 ak 返回的品种历史数据也都是全的.
@@ -389,6 +392,7 @@ class Macd(StrategyTemplate):
         byd_df_list: list[DataFrame] = []
         # 昨交易日的数据...
         yd_df_list: list[DataFrame] = []
+        
         # 遍历每个交易所
         for exchange_id in self.results['exchange'].map(lambda x: x.value).unique():
             # 关注的 ak.get_futures_daily 中的列
@@ -406,13 +410,17 @@ class Macd(StrategyTemplate):
                 yd_df = ak.get_futures_daily(start_date=yd_trade_date_str, end_date=yd_trade_date_str, market=exchange_id)
             except Exception:
                 self.write_log(f"从 AkShare 获取历史数据失败 ({exchange_id}) {traceback.format_exc()}")
+            # 特别处理 SHFE, INE, GFEX 这几个交易所返回的数据，具体逻辑如下：
+            # 我们使用 ak.get_futures_daily 获取历史行情，ak 是直接从交易所官网爬取的数据
+            # 而 SHFE, INE, GFEX 这几个交易所官网的数据中，合约代码都是 *大写* 的
+            # 这与我们从 CTP 获取的合约信息中的代码不一致，CTP 的是 *小写* 的
+            # 所以我们以 CTP 为基准，将从 AkShare 返回的数据转换成小写
+            if exchange_id in {Exchange.SHFE.value, Exchange.INE.value, Exchange.GFEX.value}:
+                byd_df['symbol'] = byd_df['symbol'].str.lower()
+                yd_df['symbol'] = yd_df['symbol'].str.lower()
             # 重命名列以准备合并到 self.results
             byd_df = byd_df[data_cols].rename(columns={'symbol': 'underlying_symbol', 'high': 'by_high', 'low': 'by_low'})
             yd_df = yd_df[data_cols].rename(columns={'symbol': 'underlying_symbol', 'high': 'y_high', 'low': 'y_low'})
-            # 特别处理 SHFE, INE, GFEX
-            if exchange_id == (Exchange.SHFE.value or Exchange.INE.value or Exchange.GFEX.value): # TODO
-                byd_df['underlying_symbol'] = byd_df['underlying_symbol'].str.lower()
-                yd_df['underlying_symbol'] = yd_df['underlying_symbol'].str.lower()
             # 收集数据
             byd_df_list.append(byd_df)
             yd_df_list.append(yd_df)
@@ -536,10 +544,9 @@ class Macd(StrategyTemplate):
             if not option_type:
                 raise ValueError(f"合约 {vt_symbol} 的期权类型信息缺失")
             
-            symbol, exchange = extract_vt_symbol(vt_symbol)
-            product = self.convert_product_to_canconinal(option_portfolio)  # 品种, 例如 lc2508-C-94000 就是 "lc_o"
-            product_type =  product + option_type.value  # 品种 + 期权类型, 例如 lc2508-C-94000 就是 "lc_o看跌期权"
-            percent = self.cal_fund_tie(vt_positionid)
+            product: str = self.fix_product(option_portfolio)  # 品种, 例如 lc2508-C-94000 就是 "lc_o"
+            product_type: str = product + option_type.value  # 品种 + 期权类型, 例如 lc2508-C-94000 就是 "lc_o看跌期权"
+            percent: float = self.cal_fund_tie(vt_positionid)
             self.fund_position[product_type] += percent
 
     def process_and_clear_data(self) -> None:
@@ -775,7 +782,7 @@ class Macd(StrategyTemplate):
                         and
                         row["future_lastPrice"] < row["future_openPrice"]
                         and
-                        row['future_lastPrice'] < self.low_in_25min['vt_underlying_symbol']
+                        row['future_lastPrice'] < self.low_in_25min[row['vt_underlying_symbol']]
                     )
                 )
                 or
@@ -791,7 +798,7 @@ class Macd(StrategyTemplate):
                         and
                         row["future_lastPrice"] > row["future_openPrice"]
                         and
-                        row['future_lastPrice'] < self.high_in_25min['vt_underlying_symbol']
+                        row['future_lastPrice'] < self.high_in_25min[row['vt_underlying_symbol']]
                     )
                 )
             )
@@ -844,7 +851,6 @@ class Macd(StrategyTemplate):
         try:
             can_proceed = self.avoid_self_dealing(vt_symbol, direction, price)
             if not can_proceed:
-                # TODO 这个平仓函数可能会因为"防自成交机制"而平仓失败
                 self.write_log(f"自成交风险未解除，跳过开仓 {vt_symbol}")
                 return
             
@@ -1021,9 +1027,8 @@ class Macd(StrategyTemplate):
 
     def instrument_info(self, vt_symbol: str) -> dict:
         """使用正则表达式匹配标的物（字母）、到期日（数字）、方向（'P'或'C'）、价格（数字）"""
-        vt_symbol = vt_symbol.split(".")[0]
-        vt_symbol = vt_symbol.replace('-', '')
-        match = re.match(r"([a-zA-Z]+)(\d+)(P|C)(\d+)$", vt_symbol)
+        symbol, exchange = extract_vt_symbol(vt_symbol)
+        match = re.match(r"([a-zA-Z]+)(\d+)-?(P|C)-?(\d+)$", symbol)
         if match:
             underlying = match.group(1)  # 标的物
             expiry = match.group(2)      # 到期日
@@ -1090,17 +1095,17 @@ class Macd(StrategyTemplate):
 
                 if vt_symbol not in results_dict:
                     continue
-                    
+                
                 result_data = results_dict[vt_symbol]
                 signal = result_data['open_signal']
                 
                 if self.current_time > row['loop_time'] and match and signal: 
-                    memo_prefix = match.group(1)
+                    memo_prefix: str = match.group(1)
                     memo: str = f"{memo_prefix}{self.order_count}"
                     direction: Direction = Direction.LONG
                     price: float = result_data['option_bidPrice1'] + result_data['price_tick']
                     volume: int = row['volume']
-                    params: Op1Params = Op1Params(
+                    self.loop_risk_ctrl.start(
                         ordersysid=ordersysid,
                         vt_symbol=vt_symbol,
                         direction=direction,
@@ -1108,15 +1113,12 @@ class Macd(StrategyTemplate):
                         volume=volume,
                         memo=memo,
                     )
-                    
-                    self.op1.try_cancel_order(params)
         except Exception:
             self.write_log(f"循环风控平仓遇到错误 {traceback.format_exc()}")
 
     def on_order(self, order: OrderData) -> None:
         """处理订单更新"""
         
-        # TODO 忽略 ordersysid 为 None 或 len(ordersysid) == 0 的订单
         ordersysid: str | None = order.ordersysid
         if not ordersysid:
             # 不存在 ordersysid 则直接忽略该回报
@@ -1133,9 +1135,9 @@ class Macd(StrategyTemplate):
 
         # 响应 OP1
         try:
-            self.op1.try_close_position(order)
+            self.loop_risk_ctrl.on_order(order)
         except Exception:
-            self.write_log(f"执行OP1操作时发生错误 {traceback.format_exc()}")
+            self.write_log(f"执行 LoopRiskCtrl 操作时发生错误 {traceback.format_exc()}")
         
         try:
             order_df: DataFrame = self.convert_order_to_df(order)
@@ -1177,7 +1179,16 @@ class Macd(StrategyTemplate):
             self.write_log(f"处理订单更新遇到错误 {traceback.format_exc()}")
     
     def on_bars(self, bars: dict[str, BarData]) -> None:
-        """K线切片回调"""
+        """
+        K线切片回调.
+        
+        该回调函数会被两个系统调用：
+        - self.pbg 也就是组合K线合成器在合成出一根1分钟K线时会调用
+        - self.load_bars 也就是加载历史数据时会调用
+        """
+        # 类似 self.on_tick()，我们应该只把期货合约喂给 PBG，所以得先把非期货合约过滤掉
+        bars = {vt_underlying_symbol: bar for vt_underlying_symbol, bar in bars.items() if vt_underlying_symbol in self.future_vt_symbols}
+        # 然后再把K线喂给 PBG
         self.pbg.update_bars(bars)
     
     def on_5minute_bars(self, bars: dict[str, BarData]) -> None:
@@ -1202,28 +1213,10 @@ class Macd(StrategyTemplate):
             self.low_in_25min[vt_underlying_symbol] = low_prices.min()
 
         self.write_log(f"五分钟K线回调: {len(bars)} 个合约")
-        for vt_symbol, bar in bars.items():
-            self.write_log(f"五分钟K线回调(第一个): {vt_symbol} -> {bar}")
-            break
-        
-        # 推送界面更新
-        self.put_event()
 
     def on_trade(self, trade: TradeData) -> None:
         """处理成交更新"""
         self.write_log(f"成交信息更新 {self.generate_trade_info_string_from_trade_data(trade)}")
-    
-    def cancel_order_auto(self, vt_orderid: str, ordersysid: str | None = None) -> None:
-        """
-        撤销报单.
-        
-        如果 ordersysid 存在，则优先使用它进行撤单, 否则使用 vt_orderid 进行撤单.
-        """
-        # TODO 写进 StrategyTemplate
-        if ordersysid:
-            self.cancel_order_by_sysid(ordersysid)
-        else:
-            self.cancel_order(vt_orderid)
     
     @staticmethod
     def convert_to_timestamp_or_nat(dt: datetime | None):
@@ -1236,25 +1229,6 @@ class Macd(StrategyTemplate):
             pd.Timestamp | pd.NaT: 转换后的时间戳, 如果 dt 为 None 则返回 pd.NaT.
         """
         return pd.to_datetime(dt) if dt else pd.NaT
-    
-    # TODO 需要更好的抽象, 不然将同一个策略用于不同的柜台时, 将不得不复制粘贴几乎全部的代码
-    def convert_product_to_canconinal(self, tianfeng_product: str) -> str:
-        """
-        将柜台返回的 symbol 转换为标准形式.
-        通常需要在外部数据进入到内部逻辑前就进行转换.
-        标准形式将用于策略内部的逻辑编写和数据处理.
-        
-        为什么需要这个函数?
-        因为不同柜台返回的 symbol 不尽相同, 需要进行转换.
-        比如紫金天风柜台返回的郑商所甲醇是 MA, 而标准形式是 MA_O.
-        又比如大友期货柜台返回的跟很多柜台的都不一样.
-        
-        Args:
-            tianfeng_symbol (str): 天风柜台返回的 symbol.
-        Returns:
-            str: 标准形式的 symbol.
-        """
-        return self.product_mapping_dict[tianfeng_product]
     
     def convert_order_to_df(self, order: OrderData) -> DataFrame:
         """
@@ -1355,26 +1329,61 @@ class Macd(StrategyTemplate):
             f"Memo={series['memo']}"
         )
 
-
-@dataclass
-class Op1Params:
-    """
-    撤单、然后平仓操作的参数.
-    """
+    # 该映射用于修复 CTP 柜台返回的品种代码
+    # Key: 从 CTP 返回的品种代码
+    # Val: 标准形式的品种代码
+    product_fix_map: dict[str, str] = {
+        # 中金所：无需修正
+        # ...
+        # 大商所：无需修正
+        # ...
+        # 郑商所：需要修正，CTP柜台返回的代码不带 '_O'
+        'SR': 'SR_O',
+        'CF': 'CF_O',
+        'TA': 'TA_O',
+        'MA': 'MA_O',
+        'RM': 'RM_O',
+        'OI': 'OI_O',
+        'PK': 'PK_O',
+        'PX': 'PX_O',
+        'SH': 'SH_O',
+        'PF': 'PF_O',
+        'SA': 'SA_O',
+        'UR': 'UR_O',
+        'SM': 'SM_O',
+        'SF': 'SF_O',
+        'AP': 'AP_O',
+        'CJ': 'CJ_O',
+        'FG': 'FG_O',
+        'PR': 'PR_O',
+        # 上期所：无需修正
+        # ...
+        # 能源所：无需修正
+        # ...
+        # 广期所：无需修正
+        # ...
+    }
     
-    # 撤单用的参数
-    ordersysid: str
-    
-    # 平仓用的参数
-    vt_symbol: str  # format: symbol.exchange
-    direction: Direction
-    price: float
-    volume: int
-    memo: str
+    def fix_product(self, broken_product: str) -> str:
+        """
+        将CTP柜台返回的品种代码转换为标准形式.
+        通常需要在外部数据进入到内部逻辑前就进行转换.
+        标准形式将用于策略内部的逻辑编写和数据处理.
+        
+        为什么需要这个函数?
+        因为不同柜台返回的品种代码不尽相同, 需要进行转换.
+        比如紫金天风CTP柜台返回的郑商所甲醇是 MA, 而标准形式是 MA_O.
+        """
+        fixed_product: str = broken_product
+        for ctp_product, canonical_product in self.product_fix_map.items():
+            fixed_product = fixed_product.replace(ctp_product, canonical_product)
+        return fixed_product
 
 
-class LoopRiskCtrlOperation:  # FIXME 更好的类命名, LoopRiskCtrlOperation
+class LoopRiskCtrl:
     """
+    循环风控操作.
+    
     该类型封装了一个“撤单，再平仓”的操作.
     
     背景:
@@ -1386,17 +1395,20 @@ class LoopRiskCtrlOperation:  # FIXME 更好的类命名, LoopRiskCtrlOperation
     而这个类就封装了这一整个操作, 把整个过程所需要维护的状态封装了一个对象, 保持逻辑模块化, 方便外部使用.
     
     使用方式:
-    首先, 确保在报单回调函数 (on_order) 中无条件调用 self.try_close_position.
-    也就是说, 无论是什么报单回报, 只要有新的报单回报 (OrderData), 都要传给 self.try_close_position.
-    剩下的操作就是在需要""撤单再平仓"的地方调用 self.try_cancel_order 方法, 传入一个 Op1Params 对象作为参数.
-    Op1Params 包含了撤单目标, 以及在*未来*收到撤单回报后需要被平仓的持仓参数.
+    首先, 确保在报单回调函数 (on_order) 中无条件调用 self.on_order().
+    也就是说, 无论是什么报单回报, 只要有新的报单回报 (OrderData), 都要传给 self.on_order().
+    剩下的操作就是在需要""撤单再平仓"的地方调用 self.start() 方法, 传入相应的参数即可.
+    参数包含了撤单目标, 以及在*未来*收到撤单回报后需要被平仓的持仓参数.
     
     使用效果:
-    调用 self.try_cancel_order 后, 如果策略收到了对应的撤单回报, 将自动发起既定的平仓操作.
+    调用 self.start() 后, 如果策略收到了对应的撤单回报, 将自动发起既定的平仓操作.
     """
     
     @dataclass
     class FutureOrder:
+        """
+        代表一个需要在未来发送的订单的参数.
+        """
         vt_symbol: str
         direction: Direction
         price: float
@@ -1405,23 +1417,36 @@ class LoopRiskCtrlOperation:  # FIXME 更好的类命名, LoopRiskCtrlOperation
         
     def __init__(self, strategy: "Macd") -> None:
         self.strategy: Macd = strategy
-        self.params_map: dict[str, list[Op1Params]] = dict()  # ordersysid: list[Op1Params]
+        self.future_order_map: dict[str, list[LoopRiskCtrl.FutureOrder]] = dict()  # ordersysid: list[Op1Params]
     
-    def try_cancel_order(self, params: Op1Params) -> None:
+    def start(
+        self,
+        ordersysid: str,
+        vt_symbol: str,
+        direction: Direction,
+        price: float,
+        volume: int,
+        memo: str,
+    ) -> None:
         """
         向交易所发送撤单请求.
         
         如果撤单成功, 一个状态为"已撤单"的报单回报会发送到 strategy#on_order 函数.
         在 strategy#on_order 函数内部应该无条件调用 self.try_close_position.
         """
-        
-        self.strategy.write_log(f"[OP1] 发送撤单请求 (vt_symbol={params.vt_symbol}, ordersysid={params.ordersysid}")
-        self.strategy.cancel_order_by_sysid(params.ordersysid)
-        params_list: list[Op1Params] = self.params_map.get(params.ordersysid, [])
-        params_list.append(params)
-        self.params_map[params.ordersysid] = params_list
+        self.strategy.write_log(f"[循环风控] 发送撤单请求 (vt_symbol={vt_symbol}, ordersysid={ordersysid}")
+        self.strategy.cancel_order_by_sysid(ordersysid)
+        params_list: list[LoopRiskCtrl.FutureOrder] = self.future_order_map.get(ordersysid, [])
+        params_list.append(LoopRiskCtrl.FutureOrder(
+            vt_symbol=vt_symbol,
+            direction=direction,
+            price=price,
+            volume=volume,
+            memo=memo
+        ))
+        self.future_order_map[ordersysid] = params_list
     
-    def try_close_position(self, order: OrderData) -> None:
+    def on_order(self, order: OrderData) -> None:
         """
         根据传入的 OrderData 进行平仓操作.
         """
@@ -1432,13 +1457,13 @@ class LoopRiskCtrlOperation:  # FIXME 更好的类命名, LoopRiskCtrlOperation
         ordersysid: str | None = order.ordersysid
         if ordersysid is None or len(ordersysid) == 0:
             return  # 说明该报单是由本策略发出去的, 但还未被交易所接受
-        params_list: list[Op1Params] | None = self.params_map.get(ordersysid, None)
+        params_list: list[LoopRiskCtrl.FutureOrder] | None = self.future_order_map.get(ordersysid, None)
         if params_list is None or len(params_list) == 0:
-            return  # 说明 ordersysid 对应的报单不由 Op1 处理
+            return  # 说明 ordersysid 对应的报单不由 LoopRiskCtrl 处理
 
         # 所有检查通过, 进行平仓操作
         for params in params_list:
-            self.strategy.write_log(f"[OP1] 发送平仓请求 (vt_symbol={params.vt_symbol}, direction={params.direction}, volume={params.volume}, memo={params.memo} @{params.price})")
+            self.strategy.write_log(f"[循环风控] 发送平仓请求 (vt_symbol={params.vt_symbol}, direction={params.direction}, volume={params.volume}, memo={params.memo} @{params.price})")
             self.strategy.request_close_position(
                 vt_symbol=params.vt_symbol,
                 direction=params.direction,
@@ -1448,4 +1473,4 @@ class LoopRiskCtrlOperation:  # FIXME 更好的类命名, LoopRiskCtrlOperation
             )
             
         # 操作完成, 重置状态
-        self.params_map.pop(ordersysid)
+        self.future_order_map.pop(ordersysid)
