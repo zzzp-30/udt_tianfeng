@@ -522,8 +522,11 @@ class Macd(StrategyTemplate):
             for pos in total_positions
             if pos.direction == Direction.SHORT
         ]
-        if not short_positions:
-            return
+
+        # Note1: 不能直接 return，否则当没有空头持仓的时候，self.fund_position 将完全是空的
+        # Note2: 等程序运行一个月没出问题的时候，这条注释和这块代码就可以完全删除了
+        # if not short_positions:
+        #     return
         
         self.fund_position = {product_type: .0 for product_type in self.results['product_type'].unique()}
         
