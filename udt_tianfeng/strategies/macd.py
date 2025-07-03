@@ -811,7 +811,7 @@ class Macd(StrategyTemplate):
             and
             row['option_bidPrice1'] > 10 * row["price_tick"]
             and
-            row["remained_trading"] <= 45
+            row["remaining_trading_days"] <= 45
             and
             (pd.to_datetime(row["date_time"]) - self.current_time).total_seconds() < 20
             and
