@@ -57,11 +57,30 @@ class Macd(StrategyTemplate):
     
     # TODO 让策略支持 CFFEX 中金所
     
-    author = "Minghao Guan & Zheyin Zeng"
+    author: str = "Minghao Guan & Zheyin Zeng"
     
-    fast_period = 12  # MACD 的快速均线的周期
-    slow_period = 26  # MACD 的慢速均线的周期
-    signal_period = 9  # MACD 的信号线的周期
+    # MACD 的快速均线的周期
+    fast_period: int = 12
+    # MACD 的慢速均线的周期
+    slow_period: int = 26
+    # MACD 的信号线的周期
+    signal_period: int = 9
+    # 不开仓的品种列表, 例如 ao, sc, i (注意不带 _o 或 _O 等后缀)
+    exclude_open_position_products: list[str] = [
+        "ao",
+        "sc",
+        "i",
+    ]
+    
+    parameters: list[str] = [
+        "fast_period",
+        "slow_period",
+        "signal_period",
+        "exclude_open_position_products",
+    ]
+    variables: list[str] = [
+        
+    ]
     
     def __init__(
         self,
@@ -258,7 +277,7 @@ class Macd(StrategyTemplate):
         # 组合K线合成器，接下来简称为 PBG (PortfolioBarGenerator)
         self.pbg = PortfolioBarGenerator(
             on_bars=self.on_bars,
-            window=1,  # FIXME 测试时用1分钟K线以提高触发频率，测试完成后改回5分钟
+            window=1,  # FIXME 测试时用1分钟K线以提高触发频率，完成后改回5分钟
             on_window_bars=self.on_5minute_bars,
             interval=Interval.MINUTE
         )
@@ -283,17 +302,15 @@ class Macd(StrategyTemplate):
         # 字典形式的 ContractData, 用于构建初始的 DataFrame
         all_contract_dict_list: list[dict[str, object]] = list()
 
-        # 指定要订阅的品种  # FIXME 测试完成后可以移除该变量，订阅所有已知合约
-        target_products = ["ps_o", "ni_o", "sn_o", "TA"]
+        # 指定要订阅的品种  # FIXME 测试完成后可以移除该变量
+        target_products = ["ps_o", "SR", "TA"]
 
         # 收集特定 ContractData 的字典形式的数据
         for contract in all_contracts:
             if (
                 contract.product == Product.OPTION
-                and
-                contract.exchange in exchange_list
-                and
-                contract.option_portfolio in target_products  # 只选择指定品种的期权  # FIXME 测试完成后可以移除该条件，订阅所有已知合约
+                and contract.exchange in exchange_list
+                # and contract.option_portfolio in target_products  # 只选择指定品种的期权  # FIXME 测试完成后可以移除该条件
             ):
                 all_contract_dict_list.append({
                     # 原生字段
@@ -469,7 +486,6 @@ class Macd(StrategyTemplate):
             self.update_future_data(vt_symbol, tick)
         else:
             self.write_log(f"未订阅的合约 {vt_symbol}")
-            return
 
         self.updated_count += 1
         if self.updated_count == self.total_instruments_num:
@@ -547,9 +563,9 @@ class Macd(StrategyTemplate):
             if not option_type:
                 raise ValueError(f"合约 {vt_symbol} 的期权类型信息缺失")
             
-            product: str = self.fix_product(option_portfolio)  # 品种, 例如 lc2508-C-94000 就是 "lc_o"
-            product_type: str = product + option_type.value  # 品种 + 期权类型, 例如 lc2508-C-94000 就是 "lc_o看跌期权"
-            percent: float = self.cal_fund_tie(vt_positionid)
+            product = self.fix_product(option_portfolio)  # 品种, 例如 lc2508-C-94000 就是 "lc_o"
+            product_type = product + option_type.value  # 品种 + 期权类型, 例如 lc2508-C-94000 就是 "lc_o看跌期权"
+            percent = self.cal_fund_tie(vt_positionid)
             self.fund_position[product_type] += percent
 
     def process_and_clear_data(self) -> None:
@@ -765,10 +781,15 @@ class Macd(StrategyTemplate):
         """开仓条件判断"""
         return (
             (
+                # 只有当品种不在 exclude_open_position_products 中时才允许开仓
+                row['product_name'] not in self.exclude_open_position_products
+            )
+            and
+            (
                 # 如果没有持仓则允许开仓
                 self.open_option_price.get(row['vt_symbol'], 0) == 0
                 or 
-                # TODO 如果有持仓则且当前买一价低于上一次开仓的价格减去 10 ticks，则允许开仓
+                # 如果有持仓则且当前买一价低于上一次开仓的价格减去 10 ticks，则允许开仓
                 row['option_bidPrice1'] < (self.open_option_price[row['vt_symbol']] - 10 * row['price_tick'])
             )
             and
@@ -1398,7 +1419,7 @@ class LoopRiskCtrl:
     而这个类就封装了这一整个操作, 把整个过程所需要维护的状态封装了一个对象, 保持逻辑模块化, 方便外部使用.
     
     使用方式:
-    首先, 确保在报单回调函数 (on_order) 中无条件调用 self.on_order().
+    首先, 确保在报单回调函数 (on_order) 中无条件调用 self.try_close_position.
     也就是说, 无论是什么报单回报, 只要有新的报单回报 (OrderData), 都要传给 self.on_order().
     剩下的操作就是在需要""撤单再平仓"的地方调用 self.start() 方法, 传入相应的参数即可.
     参数包含了撤单目标, 以及在*未来*收到撤单回报后需要被平仓的持仓参数.
