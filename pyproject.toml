@@ -24,6 +24,10 @@ vnpy-ctp = { path = "../vnpy_ctp" }
 vnpy-mysql = { path = "../vnpy_mysql" }
 vnpy-simplestrategy = { path = "../vnpy_simplestrategy" }
 
+[[tool.uv.index]]
+url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
+default = true
+
 [tool.ruff]
 target-version = "py313"
 output-format = "full"
