@@ -65,21 +65,64 @@ class Macd(StrategyTemplate):
     slow_period: int = 26
     # MACD 的信号线的周期
     signal_period: int = 9
-    # 不开仓的品种列表, 例如 ao, sc, i (注意不带 _o 或 _O 等后缀)
-    exclude_open_position_products: list[str] = [
-        "ao",
-        "sc",
-        "i",
-    ]
-    
-    parameters: list[str] = [
-        "fast_period",
-        "slow_period",
-        "signal_period",
-        "exclude_open_position_products",
-    ]
-    variables: list[str] = [
-        
+    # 订阅的期权合约的产品代码, 例如 au_o, sc_o, i_o
+    # 特别说明: 如果是郑商所，不需要写 _o 或  _O 后缀 (为什么? 因为 CTP 返回的就是这样的)
+    subscribe_product_list: list[str] = [
+        # "IO",
+        # "HO",
+        # "MO",
+        # "m_o",
+        # "c_o",
+        # "i_o",
+        # "pg_o",
+        # "pp_o",
+        # "v_o",
+        # "l_o",
+        # "p_o",
+        # "a_o",
+        # "b_o",
+        # "y_o",
+        # "eg_o",
+        # "eb_o",
+        # "jd_o",
+        # "lh_o",
+        # "lg_o",
+        # "cs_o",
+        # "SR",
+        # "CF",
+        "TA",
+        # "MA",
+        # "RM",
+        # "OI",
+        # "PK",
+        # "PX",
+        # "SH",
+        # "PF",
+        # "SA",
+        # "UR",
+        # "SM",
+        # "SF",
+        # "AP",
+        # "CJ",
+        # "FG",
+        # "PR",
+        # "cu_o",
+        # "au_o",
+        # "al_o",
+        # "zn_o",
+        # "rb_o",
+        # "ag_o",
+        # "ru_o",
+        # "pb_o",
+        "ni_o",
+        "sn_o",
+        # "ao_o",
+        # "br_o",
+        # "ad_o",
+        # "sc_o",
+        # "si_o",
+        # "lc_o",
+        "ps_o"
     ]
     
     def __init__(
@@ -302,15 +345,12 @@ class Macd(StrategyTemplate):
         # 字典形式的 ContractData, 用于构建初始的 DataFrame
         all_contract_dict_list: list[dict[str, object]] = list()
 
-        # 指定要订阅的品种  # FIXME 测试完成后可以移除该变量
-        target_products = ["ps_o", "SR", "TA"]
-
         # 收集特定 ContractData 的字典形式的数据
         for contract in all_contracts:
             if (
                 contract.product == Product.OPTION
                 and contract.exchange in exchange_list
-                # and contract.option_portfolio in target_products  # 只选择指定品种的期权  # FIXME 测试完成后可以移除该条件
+                and contract.option_portfolio in self.subscribe_product_list  # 只选择指定品种的期权
             ):
                 all_contract_dict_list.append({
                     # 原生字段
@@ -538,7 +578,7 @@ class Macd(StrategyTemplate):
             for pos in total_positions
             if pos.direction == Direction.SHORT
         ]
-
+        
         # Note1: 不能直接 return，否则当没有空头持仓的时候，self.fund_position 将完全是空的
         # Note2: 等程序运行一个月没出问题的时候，这条注释和这块代码就可以完全删除了
         # if not short_positions:
@@ -563,9 +603,9 @@ class Macd(StrategyTemplate):
             if not option_type:
                 raise ValueError(f"合约 {vt_symbol} 的期权类型信息缺失")
             
-            product = self.fix_product(option_portfolio)  # 品种, 例如 lc2508-C-94000 就是 "lc_o"
-            product_type = product + option_type.value  # 品种 + 期权类型, 例如 lc2508-C-94000 就是 "lc_o看跌期权"
-            percent = self.cal_fund_tie(vt_positionid)
+            product: str = self.fix_product(option_portfolio)  # 品种, 例如 lc2508-C-94000 就是 "lc_o"
+            product_type: str = product + option_type.value  # 品种 + 期权类型, 例如 lc2508-C-94000 就是 "lc_o看跌期权"
+            percent: float = self.cal_fund_tie(vt_positionid)
             self.fund_position[product_type] += percent
 
     def process_and_clear_data(self) -> None:
@@ -780,11 +820,6 @@ class Macd(StrategyTemplate):
     def open_condition(self, row: pd.Series, product_type: str) -> bool:
         """开仓条件判断"""
         return (
-            (
-                # 只有当品种不在 exclude_open_position_products 中时才允许开仓
-                row['product_name'] not in self.exclude_open_position_products
-            )
-            and
             (
                 # 如果没有持仓则允许开仓
                 self.open_option_price.get(row['vt_symbol'], 0) == 0

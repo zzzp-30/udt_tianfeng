@@ -7,15 +7,6 @@
     "macd": {
         "class_name": "Macd",
         "vt_symbols": [],
-        "setting": {
-            "fast_period": 12,
-            "slow_period": 26,
-            "signal_period": 9,
-            "exclude_open_position_products": [
-                "ao",
-                "sc",
-                "i"
-            ]
-        }
+        "setting": {}
     }
 }
