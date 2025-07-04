@@ -683,23 +683,32 @@ class Macd(StrategyTemplate):
                 lambda x: x['strike_price'] - x['future_lastPrice'],
                 axis=1
             )
-            processed_results['target_option_rank'] = processed_results.groupby(['option_type', 'vt_underlying_symbol'], sort=False)['diff'].rank()
+            processed_results['target_option_rank'] = processed_results.groupby(['option_type', 'vt_underlying_symbol'], sort=False)['diff'].rank(method='dense')
             results_dict = {row['vt_symbol']: row.to_dict() for _, row in processed_results.iterrows()}
 
             target = []
             for (option_type, _), group in processed_results.groupby(['option_type', 'vt_underlying_symbol'], sort=False):
                 # 筛选符合条件的合约
-                if option_type == OptionType.CALL:
-                    condition = (group['diff'] > 0) & (group['option_bidPrice1'] > group['option_openPrice'] + 10 * group['price_tick'])
-                elif option_type == OptionType.PUT:
-                    condition = (group['diff'] < 0) & (group['option_bidPrice1'] > group['option_openPrice'] + 10 * group['price_tick'])
-                else:
-                    continue
+                condition: Series[bool]
+                match option_type:
+                    case OptionType.CALL:
+                        condition = (
+                            (group['diff'] > 0) &  # 筛出虚值合约
+                            (group['target_option_rank'] == 3) &  # 虚值合约第三档
+                            (group['option_bidPrice1'] > group['option_openPrice'] + 10 * group['price_tick'])  # 大于开盘价+10跳价格
+                        )
+                    case OptionType.PUT:
+                        condition = (
+                            (group['diff'] < 0) &  # 筛出虚值合约
+                            (group['target_option_rank'] == 3) &  # 虚值合约第三档
+                            (group['option_bidPrice1'] > group['option_openPrice'] + 10 * group['price_tick'])  # 大于开盘价+10跳价格
+                        )
+                    case _:
+                        continue
                 
                 # 筛选符合条件的合约
                 filtered = group[condition]
 
-                target = []
                 # 优先选择 date_rank == 1(当月) 的合约
                 selected = filtered[filtered['date_rank'] == 1]
 
