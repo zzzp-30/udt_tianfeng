@@ -1006,9 +1006,9 @@ class Combined(StrategyTemplate):
                     last_price > data['by_high']
                     and
                     (
-                        last_price > 1.005 * pre_close
+                        last_price > 1.011 * pre_close
                         or
-                        last_price > 1.005 * open_price
+                        last_price > 1.011 * open_price
                     )
                 )
             )
@@ -1026,9 +1026,9 @@ class Combined(StrategyTemplate):
                     last_price < data['by_low']
                     and
                     (
-                        last_price < 0.995 * pre_close
+                        last_price < 0.989 * pre_close
                         or
-                        last_price < 0.995 * open_price
+                        last_price < 0.989 * open_price
                     )
                 )
             )
