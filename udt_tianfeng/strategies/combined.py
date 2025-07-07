@@ -55,7 +55,123 @@ class Combined(StrategyTemplate):
     策略逻辑包含：看时机卖出开仓，风控时买入平仓。具体向邹老师了解。
     """
     
-    author = "Minghao Guan & Zheyin Zeng"
+    author: str = "Minghao Guan & Zheyin Zeng"
+    
+    # 开仓的品种列表, 例如: ao, sc, i (注意不带 _o 或 _O 等后缀) 
+    open_position_prouduct_list: list[str] = [
+        "IO",
+        "HO",
+        "MO",
+        "m",
+        "c",
+        "i",
+        "pg",
+        "pp",
+        "v",
+        "l",
+        "p",
+        "a",
+        "b",
+        "y",
+        "eg",
+        "eb",
+        "jd",
+        "lh",
+        "lg",
+        "cs",
+        "SR",
+        "CF",
+        "TA",
+        "MA",
+        "RM",
+        "OI",
+        "PK",
+        "PX",
+        "SH",
+        "PF",
+        "SA",
+        "UR",
+        "SM",
+        "SF",
+        "AP",
+        "CJ",
+        "FG",
+        "PR",
+        "cu",
+        "au",
+        "al",
+        "zn",
+        "rb",
+        "ag",
+        "ru",
+        "pb",
+        "ni",
+        "sn",
+        "ao",
+        "br",
+        "sc",
+        # "si",
+        # "lc",
+        # "ps",
+    ]
+    
+    # 风控的品种列表, 例如: ao, sc, i (注意不带 _o 或 _O 等后缀)
+    risk_ctrl_product_list: list[str] = [
+        "IO",
+        "HO",
+        "MO",
+        "m",
+        "c",
+        "i",
+        "pg",
+        "pp",
+        "v",
+        "l",
+        "p",
+        "a",
+        "b",
+        "y",
+        "eg",
+        "eb",
+        "jd",
+        "lh",
+        "lg",
+        "cs",
+        "SR",
+        "CF",
+        "TA",
+        "MA",
+        "RM",
+        "OI",
+        "PK",
+        "PX",
+        "SH",
+        "PF",
+        "SA",
+        "UR",
+        "SM",
+        "SF",
+        "AP",
+        "CJ",
+        "FG",
+        "PR",
+        "cu",
+        "au",
+        "al",
+        "zn",
+        "rb",
+        "ag",
+        "ru",
+        "pb",
+        "ni",
+        "sn",
+        "ao",
+        "br",
+        "sc",
+        # "si",
+        # "lc",
+        # "ps",
+    ]
     
     def __init__(
         self,
@@ -775,17 +891,10 @@ class Combined(StrategyTemplate):
         current_time = self.current_time.time()
         coefficient = row['vix']  # vix 越低对浮动要求越低, 也就越容易开仓, 反之亦然
         exchange = row['exchange']
+        product_name = row['product_name']
         
-        # 不开仓的交易所，在这里进行指定
-        exchanges_that_do_not_open_positions: list[Exchange] = [
-            # Exchange.CFFEX,
-            # Exchange.CZCE,
-            # Exchange.DCE,
-            # Exchange.SHFE,
-            # Exchange.INE,
-            # Exchange.GFEX,
-        ]
-        if exchange in exchanges_that_do_not_open_positions:
+        # 不在开仓品种列表内的合约直接返回 False
+        if product_name not in self.open_position_prouduct_list:
             return False
         
         # 按照交易所，进行对应的开仓条件判断
@@ -985,6 +1094,12 @@ class Combined(StrategyTemplate):
             # 对于其他不受支持的交易所，直接抛出异常（这不应该发生，之前的 case 必须覆盖所有情况）
             case _:
                 raise ValueError(f"不支持的交易所: {exchange.value}")
+    
+    def check_product_whitelist(self, data: dict) -> bool:
+        """检查合约品种是否应该风控"""
+        name: str = data['product_name']
+        result: bool = name in self.risk_ctrl_product_list
+        return result
 
     @staticmethod
     def check_future_condition(data: dict, option_type: OptionType) -> bool:
@@ -1105,6 +1220,7 @@ class Combined(StrategyTemplate):
 
                 if (
                     self.is_trading_time(exchange) and
+                    self.check_product_whitelist(data) and
                     self.check_future_condition(data, option_type) and
                     self.check_option_condition(data)
                 ):
@@ -1136,6 +1252,7 @@ class Combined(StrategyTemplate):
 
                 if (
                     self.is_trading_time(exchange) and
+                    self.check_product_whitelist(data) and
                     self.check_future_condition(data, option_type) and
                     self.check_option_condition(data)
                 ):
@@ -1193,6 +1310,7 @@ class Combined(StrategyTemplate):
                     # 如果达到风控条件，则挂风控平仓单
                     if (
                         self.is_trading_time(exchange) and
+                        self.check_product_whitelist(data) and
                         self.check_future_condition(data, option_type) and
                         self.check_option_condition(data)
                     ):
@@ -1259,6 +1377,7 @@ class Combined(StrategyTemplate):
                     product_name = data['期货']
                     if (
                         self.is_trading_time(exchange) and
+                        self.check_product_whitelist(data) and
                         self.check_future_condition(data, option_type) and
                         self.contract_send_count.get(vt_symbol, 0) < 1
                     ):
