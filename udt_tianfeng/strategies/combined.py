@@ -1297,12 +1297,31 @@ class Combined(StrategyTemplate):
             # 空头持仓可平量
             short_pos_available: int = int(pos_holding.short_pos - pos_holding.short_pos_frozen)
             
+            # FIXME 临时修复，解决空头持仓可平量不正确的问题
+            #  这里的方案就是同时检查本地持仓数据应该小于或等于同步持仓数据
+            #
+            # 空头持仓可平量（同步数据）
+            short_pos_available_sync: int = 0
+            for position in self.main_engine.get_all_positions():
+                if (
+                    position.direction == Direction.SHORT
+                    and
+                    position.vt_symbol == vt_symbol
+                ):
+                    # 获取当前合约的空头持仓量
+                    short_pos_available_sync = int(position.volume - position.frozen)
+                    break
+            
             # 跳过没有空头持仓的合约
             if short_pos <= 0:
                 continue
             
             # 如果空头持仓可平量大于 0
-            if short_pos_available > 0:
+            if (
+                short_pos_available > 0
+                and
+                short_pos_available <= short_pos_available_sync  # FIXME 临时修复，解决空头持仓可平量不正确的问题
+            ):
                 try:
                     data = results_dict[vt_symbol]
                     option_type = data['option_type']
