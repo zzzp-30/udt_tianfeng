@@ -110,9 +110,9 @@ class Combined(StrategyTemplate):
         "ao",
         "br",
         "sc",
-        # "si",
-        # "lc",
-        # "ps",
+        "si",
+        "lc",
+        "ps",
     ]
     
     # 风控的品种列表, 例如: ao, sc, i (注意不带 _o 或 _O 等后缀)
@@ -168,10 +168,12 @@ class Combined(StrategyTemplate):
         "ao",
         "br",
         "sc",
-        # "si",
-        # "lc",
-        # "ps",
+        "si",
+        "lc",
+        "ps",
     ]
+    
+    
     
     def __init__(
         self,
@@ -199,8 +201,8 @@ class Combined(StrategyTemplate):
         
         self.investor: str = ''  # TODO 每个策略应该对应一个投资者账号, 之后会用到
         self.volume_per_open_position: int = 1  # 每次开仓时交易的合约数量（合约张数）
-        self.max_open_position_volume_in_total: int = 10  # 每次启动程序最多交易的合约数量（合约张数）
-        self.max_open_position_volume_per_contract: int = 1  # 每次启动程序每个合约最多交易的数量（合约张数）
+        self.max_open_position_volume_in_total: int = 50  # 每次启动程序最多交易的合约数量（合约张数）
+        self.max_open_position_volume_per_contract: int = 3  # 每次启动程序每个合约最多交易的数量（合约张数）
         self.loop_risk_ctrl_cooldown: int = 40  # 同个报单两个循环风控之间的最小间隔, 单位: 秒
         
         # --- 策略状态 ---
@@ -313,6 +315,9 @@ class Combined(StrategyTemplate):
         self.av_trend_close_pos: AvTrendClosePos = AvTrendClosePos(self)
         # AvTempFix1 实例, 用于 AV 走势平仓错误的临时解决方案  # TODO 临时措施. 在修复 AV 走势平仓错误后应该将其移除
         self.av_trend_temp_fix: AvTrendTempFix = AvTrendTempFix(self)
+        
+        # 撤单计数器，为了统计策略运行期间撤单数，以便与阈值比较并发送提醒
+        self.n_cancel_order: int = 0
 
     def on_init(self) -> None:
         """策略初始化"""
@@ -816,7 +821,7 @@ class Combined(StrategyTemplate):
             self.cancel_orders_before_risk_ctrl(results_dict)
             self.close_positions_for_loop_risk_ctrl(results_dict)
             self.close_positions_for_AV(results_dict)
-            self.open_positions(target_option)  # 邹老师: 法定节假日前关闭开仓
+            # self.open_positions(target_option)  # 邹老师: 法定节假日前关闭开仓
             self.cancel_orders_in_risk(results_dict)
         except Exception:
             self.write_log(f"执行交易信号时遇到错误 {traceback.format_exc()}")
@@ -851,6 +856,8 @@ class Combined(StrategyTemplate):
                 ):
                     self.write_log(f"避免自成交请求撤单 {self.generate_order_info_string_from_series(row)}")
                     self.cancel_order_by_sysid(ordersysid)
+                    self.increment_cancel_count()
+                    
                     conflict_found = True
             if conflict_found:
                 sleep(0.5)  # FIXME 这会阻塞 run 线程
@@ -913,23 +920,23 @@ class Combined(StrategyTemplate):
                         (
                             row["option_type"] == OptionType.CALL
                             and
-                            row["future_lastPrice"] < (1 - 0.003 * coefficient) * row["future_openPrice"]
+                            row["future_lastPrice"] < (1 - 0.01 * coefficient) * row["future_openPrice"]
                             and
-                            row["future_lastPrice"] < (1 - 0.003 * coefficient) * row["future_preClosePrice"]
+                            row["future_lastPrice"] < (1 - 0.01 * coefficient) * row["future_preClosePrice"]
                         )
                         or
                         (
                             row["option_type"] == OptionType.PUT
                             and
-                            row["future_lastPrice"] > (1 + 0.003 * coefficient) * row["future_openPrice"]
+                            row["future_lastPrice"] > (1 + 0.01 * coefficient) * row["future_openPrice"]
                             and
-                            row["future_lastPrice"] > (1 + 0.003 * coefficient) * row["future_preClosePrice"]
+                            row["future_lastPrice"] > (1 + 0.01 * coefficient) * row["future_preClosePrice"]
                         )
                     )
                     and
                     row["option_volume"] > 100
                     and
-                    row["option_lastPrice"] >= row["price_tick"] * 5
+                    row["option_lastPrice"] >= row["price_tick"] * 8
                     and
                     row["option_askPrice1"] - row["option_bidPrice1"] <= 3 * row["price_tick"]
                     and
@@ -954,7 +961,7 @@ class Combined(StrategyTemplate):
                     (
                         datetime.strptime('09:10', '%H:%M').time() <= current_time <= datetime.strptime('11:27', '%H:%M').time()
                         or
-                        datetime.strptime('13:05', '%H:%M').time() <= current_time <= datetime.strptime('13:55', '%H:%M').time()
+                        datetime.strptime('13:05', '%H:%M').time() <= current_time <= datetime.strptime('14:15', '%H:%M').time()
                         or
                         datetime.strptime('21:30', '%H:%M').time() <= current_time <= datetime.strptime('22:50', '%H:%M').time()
                     )
@@ -1013,6 +1020,7 @@ class Combined(StrategyTemplate):
                     and
                     (pd.to_datetime(row["date_time"]) - self.current_time).total_seconds() < 20
                     and
+                    # 可用资金 > 全部资金的10%
                     self.main_engine.get_all_accounts()[0].available > 0.1 * self.main_engine.get_all_accounts()[0].balance
                     and
                     self.fund_position[product_type] < 0.1
@@ -1226,6 +1234,7 @@ class Combined(StrategyTemplate):
                 ):
                     self.write_log(f"风控前撤单 请求撤单 {self.generate_order_info_string_from_series(row)}")
                     self.cancel_order_by_sysid(ordersysid)
+                    self.increment_cancel_count()
                     self.order_info.loc[self.order_info['ordersysid'] == ordersysid, 'status'] = Status.CANCELLED  # FIXME 要留着吗? 实际上要等 on_order 更新才是真的撤单
             except Exception:
                 self.write_log(f"再风控时遇到错误 ({vt_symbol}) {traceback.format_exc()}")
@@ -1258,6 +1267,7 @@ class Combined(StrategyTemplate):
                 ):
                     self.write_log(f"开仓前撤单 请求撤单 {self.generate_order_info_string_from_series(row)}")
                     self.cancel_order_by_sysid(ordersysid)
+                    self.increment_cancel_count()
             except Exception:
                 self.write_log(f"开仓前撤单时遇到错误 {self.generate_order_info_string_from_series(row)}")
 
@@ -1352,9 +1362,9 @@ class Combined(StrategyTemplate):
                     elif 19 < data['remaining_trading_days'] <= 130 and data['close_signal']:
                         price: float
                         match exchange:
-                            case Exchange.CFFEX | Exchange.DCE:
+                            case Exchange.CFFEX | Exchange.INE:
                                 price = data['price_tick'] * 3
-                            case Exchange.CZCE | Exchange.SHFE | Exchange.INE | Exchange.GFEX:
+                            case Exchange.CZCE | Exchange.SHFE | Exchange.DCE | Exchange.GFEX:
                                 price = data['price_tick'] * 2
                             case _:
                                 raise ValueError(f"不支持的交易所: {exchange.value}")
@@ -1401,7 +1411,7 @@ class Combined(StrategyTemplate):
                         self.contract_send_count.get(vt_symbol, 0) < 1
                     ):
                         context = (
-                            f"账户：谦量天风\n"
+                            f"账户：谦量齐盛\n"
                             f"合约：{product_name} {vt_symbol}\n"
                             f"风控平仓待报入"
                         )
@@ -1651,7 +1661,7 @@ class Combined(StrategyTemplate):
             ):
                 product_name: str = self.results.loc[self.results['vt_symbol'] == order.vt_symbol, '期货'].item()
                 context = (
-                    f'账户：谦量天风\n'
+                    f'账户：谦量齐盛\n'
                     f'合约：{product_name} {order.vt_symbol}\n'
                     f'价格：{order.price}\n'
                     f'数量：{order.volume}\n'
@@ -1891,6 +1901,19 @@ class Combined(StrategyTemplate):
             fixed_underlying = fixed_underlying.replace(ctp_underlying_product, ak_underlying_product)
         return fixed_underlying
 
+    def increment_cancel_count(self) -> None:
+        """策略撤单数+1"""
+        self.n_cancel_order += 1
+          
+    def get_cancel_count(self) -> int:
+        """获取策略撤单数"""
+        return self.n_cancel_order
+    
+    def get_order_count(self) -> int:
+        """获取策略报单数"""
+        return self.order_count
+    
+
 
 class LoopRiskCtrl:
     """
@@ -1948,6 +1971,7 @@ class LoopRiskCtrl:
         """
         self.strategy.write_log(f"[循环风控] 发送撤单请求 (vt_symbol={vt_symbol}, ordersysid={ordersysid}")
         self.strategy.cancel_order_by_sysid(ordersysid)
+        self.strategy.increment_cancel_count()
         params_list: list[LoopRiskCtrl.FutureOrder] = self.future_order_map.get(ordersysid, [])
         params_list.append(LoopRiskCtrl.FutureOrder(
             vt_symbol=vt_symbol,
@@ -2032,6 +2056,7 @@ class AvTrendClosePos:
         """
         self.parent.write_log(f"[AV走势] 发送撤单请求 (ordersysid={ordersysid}, vt_symbol={vt_symbol})")
         self.parent.cancel_order_by_sysid(ordersysid)
+        self.parent.increment_cancel_count()
         params_list: list[AvTrendClosePos.FutureOrder] = self.future_order_map.get(ordersysid, [])
         params_list.append(AvTrendClosePos.FutureOrder(
             vt_symbol=vt_symbol,
@@ -2109,7 +2134,7 @@ class AvTrendTempFix:  # FIXME 更好的类命名
             self.stackable_cooldown_map.test(vt_symbol)
         ):
             context: str = (
-                f'账户：谦量天风\n'
+                f'账户：谦量齐盛\n'
                 f'合约：{vt_symbol}\n'
                 f'AV走势平仓错误\n'
             )

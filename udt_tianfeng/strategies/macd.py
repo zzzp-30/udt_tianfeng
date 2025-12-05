@@ -73,7 +73,7 @@ class Macd(StrategyTemplate):
         "MO",
         "m_o",
         "c_o",
-        # "i_o",
+        "i_o",
         "pg_o",
         "pp_o",
         "v_o",
@@ -107,7 +107,7 @@ class Macd(StrategyTemplate):
         "FG",
         "PR",
         "cu_o",
-        # "au_o",
+        "au_o",
         "al_o",
         "zn_o",
         "rb_o",
@@ -119,7 +119,7 @@ class Macd(StrategyTemplate):
         "ao_o",
         "br_o",
         "ad_o",
-        # "sc_o",
+        "sc_o",
         "si_o",
         "lc_o",
         "ps_o"
@@ -683,7 +683,26 @@ class Macd(StrategyTemplate):
                 lambda x: x['strike_price'] - x['future_lastPrice'],
                 axis=1
             )
-            processed_results['target_option_rank'] = processed_results.groupby(['option_type', 'vt_underlying_symbol'], sort=False)['diff'].rank(method='dense')
+            
+            # 修改：分别为认购和认沽期权计算虚值排名
+            processed_results['target_option_rank'] = 0
+            
+            for (option_type, underlying), group_data in processed_results.groupby(['option_type', 'vt_underlying_symbol'], sort=False):
+                if option_type == OptionType.CALL:
+                    # 认购期权：diff > 0 为虚值，按diff升序排序
+                    otm_mask = group_data['diff'] > 0
+                    if otm_mask.any():
+                        otm_data = group_data[otm_mask]
+                        ranks = otm_data['diff'].rank(method='dense', ascending=True)
+                        processed_results.loc[otm_data.index, 'target_option_rank'] = ranks
+                elif option_type == OptionType.PUT:
+                    # 认沽期权：diff < 0 为虚值，按diff降序排序
+                    otm_mask = group_data['diff'] < 0
+                    if otm_mask.any():
+                        otm_data = group_data[otm_mask]
+                        ranks = otm_data['diff'].rank(method='dense', ascending=False)
+                        processed_results.loc[otm_data.index, 'target_option_rank'] = ranks
+            
             results_dict = {row['vt_symbol']: row.to_dict() for _, row in processed_results.iterrows()}
 
             target = []
@@ -694,14 +713,16 @@ class Macd(StrategyTemplate):
                     case OptionType.CALL:
                         condition = (
                             (group['diff'] > 0) &  # 筛出虚值合约
-                            (group['target_option_rank'] == 3) &  # 虚值合约第三档
-                            (group['option_bidPrice1'] > group['option_openPrice'] + 10 * group['price_tick'])  # 大于开盘价+10跳价格
+                            (group['target_option_rank'] == 3) 
+                            # &  # 虚值合约第三档
+                            # (group['option_bidPrice1'] > group['option_openPrice'] + 10 * group['price_tick'])  # 大于开盘价+10跳价格
                         )
                     case OptionType.PUT:
                         condition = (
                             (group['diff'] < 0) &  # 筛出虚值合约
-                            (group['target_option_rank'] == 3) &  # 虚值合约第三档
-                            (group['option_bidPrice1'] > group['option_openPrice'] + 10 * group['price_tick'])  # 大于开盘价+10跳价格
+                            (group['target_option_rank'] == 3) 
+                            # &  # 虚值合约第三档
+                            # (group['option_bidPrice1'] > group['option_openPrice'] + 10 * group['price_tick'])  # 大于开盘价+10跳价格
                         )
                     case _:
                         continue
@@ -848,7 +869,9 @@ class Macd(StrategyTemplate):
                     (
                         row["future_lastPrice"] < row["future_averagePrice"]
                         and
-                        row["future_lastPrice"] < row["future_openPrice"]
+                        row["future_lastPrice"] < row["future_openPrice"] 
+                        and
+                        row["future_lastPrice"] < row["future_preClosePrice"]
                         and
                         row['future_lastPrice'] < self.low_in_25min[row['vt_underlying_symbol']]
                     )
@@ -866,23 +889,26 @@ class Macd(StrategyTemplate):
                         and
                         row["future_lastPrice"] > row["future_openPrice"]
                         and
-                        row['future_lastPrice'] < self.high_in_25min[row['vt_underlying_symbol']]
+                        row["future_lastPrice"] > row["future_preClosePrice"] 
+                        and
+                        row['future_lastPrice'] > self.high_in_25min[row['vt_underlying_symbol']]
                     )
                 )
             )
             and
             row["open_signal"]
             and
-            row["option_volume"] > 100
+            row["option_volume"] > 1
             and
-            row["option_askPrice1"] - row["option_bidPrice1"] < 3 * row["price_tick"]
+            row["option_askPrice1"] - row["option_bidPrice1"] < 5 * row["price_tick"]
             and
             row['option_bidPrice1'] > 10 * row["price_tick"]
             and
-            row["remaining_trading_days"] <= 45
+            row["remaining_trading_days"] <= 30
             and
             (pd.to_datetime(row["date_time"]) - self.current_time).total_seconds() < 20
             and
+            # 可用资金 > 全部资金的10%
             self.main_engine.get_all_accounts()[0].available > 0.1 * self.main_engine.get_all_accounts()[0].balance
             and
             self.fund_position[product_type] < 0.1
@@ -1232,7 +1258,7 @@ class Macd(StrategyTemplate):
             if 'MACDRiskCtrl' in str(order.memo) and order.status == Status.NOTTRADED:
                 product_name: str = self.results.loc[self.results['vt_symbol'] == order.vt_symbol, '期货'].item()
                 context = (
-                    f'账户：谦量天风\n'
+                    f'账户：谦量齐盛\n'
                     f'合约：{product_name} {order.vt_symbol}\n'
                     f'价格：{order.price}\n'
                     f'数量：{order.volume}\n'
@@ -1542,3 +1568,5 @@ class LoopRiskCtrl:
             
         # 操作完成, 重置状态
         self.future_order_map.pop(ordersysid)
+
+
