@@ -267,12 +267,12 @@ def _compose_and_send_feishu_balance(title: str, curr_balance: float | None, y_b
     # - 计算逻辑内置于本函数，调用方只需提供当前余额与昨日余额
     # - 若某个数值缺失，则对应文本以“?”占位，避免抛错影响其他账户
     cur_line = (
-        f"当前市值权益：{curr_balance:.2f}" if curr_balance is not None else "当前市值权益：?"
+        f"市值权益：{curr_balance:.2f}" if curr_balance is not None else "当前市值权益：?"
     )
     y_line = (
-        f"昨日收盘市值权益：{(float(y_balance) if y_balance is not None else float('nan')):.2f}"
+        f"昨权益：{(float(y_balance) if y_balance is not None else float('nan')):.4f}"
         if y_balance is not None
-        else "昨日收盘市值权益：?"
+        else "昨权益：?"
     )
     # 差值：当前 - 昨日；若任一缺失则设为 None
     diff = None
@@ -609,6 +609,7 @@ def run_child() -> None:
     
     last_tick_ts: float | None = None
     last_daily_date: str | None = None
+    last_morning_date: str | None = None
     
  
     while True:
@@ -626,29 +627,33 @@ def run_child() -> None:
         
         # 早上9:30强制提醒账户余额（市值权益）
         if now.hour == 9 and now.minute == 30:
-            save_and_notify_balance_per_account(main_engine, realtime=True, force_notify=True)
+            today = now.strftime('%Y-%m-%d')
+            if last_morning_date != today:
+                save_and_notify_balance_per_account(main_engine, realtime=True, force_notify=True)
+                last_morning_date = today
 
         # 下午2:30提醒账户余额（市值权益），并保存至 balance.xlsx（balance.xlsx专门用来存每日14:55的账户余额）
         if now.hour == 14 and now.minute == 55:
             today = now.strftime('%Y-%m-%d')
             if last_daily_date != today:
                 save_and_notify_balance_per_account(main_engine, realtime=False, force_notify=True)
+                
+                for strategy_name, strategy in strategy_engine.strategies.items():  # 遍历所有策略，统计报、撤单数
+                    order_count = strategy.get_order_count # 该策略的报单数
+                    cancel_count = strategy.get_cancel_count # 该策略的撤单数
+                    
+                    # 日志记录当前报单数和撤单数
+                    strategy_engine.write_log(f"账户：{map_accountid_to_name('CTP.'+ ctp_setting['用户名'])}  策略：{strategy_name}  当前报单数: {order_count}, 撤单数: {cancel_count}")
+                    
+                    # 调用monitor_order_count函数检测当前报单数和撤单数
+                    alert_message = monitor_order_count(order_count, cancel_count)
+                    if alert_message:
+                        for message in alert_message:
+                            composed_message = f"账户：{map_accountid_to_name('CTP.'+ ctp_setting['用户名'])}  策略：{strategy_name}"+message
+                            strategy_engine.write_log(composed_message)
+                            _send_feishu_text(composed_message)
+                
                 last_daily_date = today
-                
-            for strategy_name, strategy in strategy_engine.strategies.items():  # 遍历所有策略，统计报、撤单数
-                order_count = strategy.get_order_count # 该策略的报单数
-                cancel_count = strategy.get_cancel_count # 该策略的撤单数
-                
-                # 日志记录当前报单数和撤单数
-                strategy_engine.write_log(f"账户：{map_accountid_to_name("CTP."+ ctp_setting["用户名"])}  策略：{strategy_name}  当前报单数: {order_count}, 撤单数: {cancel_count}")
-                
-                # 调用monitor_order_count函数检测当前报单数和撤单数
-                alert_message = monitor_order_count(order_count, cancel_count)
-                if alert_message:
-                    for message in alert_message:
-                        composed_message = f"账户：{map_accountid_to_name("CTP."+ ctp_setting["用户名"])}  策略：{strategy_name}"+message
-                        strategy_engine.write_log(composed_message)
-                        _send_feishu_text(composed_message)
          
         
             

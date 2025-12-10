@@ -1,4 +1,35 @@
 {
-    "macd": {}
-    
+    "macd": {},
+    "CFFEX_Strategy": {
+        "option_count": {},
+        "processed_orders": [],
+        "trading_date": "2025-12-10",
+        "order_count": 0,
+        "total_traded_volume": 0,
+        "single_traded_volume": {}
+    },
+    "DCE_Strategy": {
+        "option_count": {},
+        "processed_orders": [],
+        "trading_date": "2025-12-10",
+        "order_count": 0,
+        "total_traded_volume": 0,
+        "single_traded_volume": {}
+    },
+    "CZCE_Strategy": {
+        "option_count": {},
+        "processed_orders": [],
+        "trading_date": "2025-12-10",
+        "order_count": 0,
+        "total_traded_volume": 0,
+        "single_traded_volume": {}
+    },
+    "SHFE_Strategy": {
+        "option_count": {},
+        "processed_orders": [],
+        "trading_date": "2025-12-10",
+        "order_count": 0,
+        "total_traded_volume": 0,
+        "single_traded_volume": {}
+    }
 }

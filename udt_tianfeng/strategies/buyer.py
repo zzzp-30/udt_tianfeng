@@ -38,6 +38,15 @@ class BuyerStrategy(StrategyTemplate):
     
     author = "买方通用策略"
 
+   # 定义需要持久化保存的变量名
+    variables = [
+        'option_count',          # 记录每个合约已开仓数量（防止重启重开）
+        'processed_orders',      # 记录已处理过的成交单ID（防止重启重复追单）
+        'trading_date',          # 记录上次运行日期（用于判断是否跨日）
+        'order_count',           # 订单编号计数
+        'total_traded_volume',   # 总风控计数
+        'single_traded_volume'   # 单品种风控计数
+    ]
     def __init__(
         self,
         strategy_engine: StrategyEngine,
@@ -111,6 +120,9 @@ class BuyerStrategy(StrategyTemplate):
         }
         self.order_info: DataFrame = DataFrame(columns=list(self.order_info_cols.keys())).astype(self.order_info_cols)
         
+        #
+        self.trading_date = ""          # 初始化为空字符串
+        self.processed_orders = []      # 初始化为空列表
         # 当前时间和计数器
         self.current_time: datetime = datetime.now(tz=CHINA_TZ)
         self.updated_count: int = 0
@@ -148,6 +160,30 @@ class BuyerStrategy(StrategyTemplate):
 
     def on_init(self) -> None:
         """策略初始化"""
+        self.write_log("策略初始化...")
+        
+        # 获取今天的日期
+        current_date = datetime.now(tz=CHINA_TZ).strftime('%Y-%m-%d')
+
+        # 【核心修改 2】日期检查与重置逻辑
+        # 如果 json 里有日期，且跟今天不一样 -> 说明跨天了 -> 清空数据
+        if self.trading_date and self.trading_date != current_date:
+            self.write_log(f"检测到新交易日 ({current_date})，重置所有策略状态...")
+            
+            self.option_count.clear()         # 清空开仓计数 -> 允许新一天开仓
+            self.processed_orders = []        # 清空已处理订单记录
+            self.single_traded_volume.clear() # 清空风控计数
+            self.total_traded_volume = 0
+            
+            self.trading_date = current_date  # 更新为今天
+            
+        # 如果 json 里没日期（第一次跑） -> 标记为今天
+        elif not self.trading_date:
+            self.trading_date = current_date
+            
+        else:
+            self.write_log(f"检测到日内重启 ({current_date})，恢复历史状态：已开仓{len(self.option_count)}个合约。")
+            
         all_order_data: list[OrderData] = self.main_engine.get_all_orders()
         new_order_records: DataFrame = DataFrame([
             {
@@ -441,8 +477,29 @@ class BuyerStrategy(StrategyTemplate):
         self.vt_symbols = option_vt_symbols + futures_vt_symbols
         self.total_instruments_num = len(self.vt_symbols)
 
+    def check_missed_orders(self):
+        """扫描所有订单，补发漏掉的追单逻辑"""
+        self.write_log("检查宕机期间的成交记录...")
+        all_orders = self.main_engine.get_all_orders()
+        
+        for order in all_orders:
+            # 筛选：已成交 + 开仓单 + 本策略品种 + 【未在 processed_orders 记录中】
+            if (order.status == Status.ALLTRADED and
+                order.offset == Offset.OPEN and
+                order.vt_symbol in self.vt_symbols and
+                order.ordersysid and 
+                order.ordersysid not in self.processed_orders):
+                
+                self.write_log(f"发现遗漏处理的成交单 {order.ordersysid}，正在补发逻辑...")
+                # 直接调用上面的 on_order，它会自动处理计数和发追单
+                self.on_order(order)
+                
     def on_start(self) -> None:
         self.write_log("BuyerStrategy策略启动")
+        
+        # 【核心修改 3.2】启动时扫描历史遗漏的成交单
+        # 这就是解决“重启后怎么知道刚才成交了”的方法
+        self.check_missed_orders()
 
     def on_stop(self) -> None:
         self.write_log("BuyerStrategy策略停止")
@@ -851,11 +908,11 @@ class BuyerStrategy(StrategyTemplate):
         )
 
     def on_order(self, order: OrderData) -> None:
-        # --- 【新增】过滤逻辑：只处理本策略订阅的合约 ---
-        if order.vt_symbol not in self.vt_symbols:
-            return
-        # ---------------------------------------------
+        # 1. 基础过滤
+        if order.vt_symbol not in self.vt_symbols: return
+        if not order.ordersysid: return  # 忽略未确认的订单
 
+        # ---------------------------------------------
         ordersysid: str | None = order.ordersysid
         if not ordersysid: return
         if order.status == Status.SUBMITTING: return
@@ -863,6 +920,7 @@ class BuyerStrategy(StrategyTemplate):
         self.write_log(f"订单信息更新 {self.generate_order_info_string_from_order_data(order)}")
 
         try:
+            # 2. 更新订单信息到 DataFrame (保持不变)
             order_df: DataFrame = self.convert_order_to_df(order)
             if ordersysid in self.order_info['ordersysid'].values:
                 self.order_info.loc[self.order_info['ordersysid'] == ordersysid, order_df.columns] = order_df.values
@@ -873,21 +931,50 @@ class BuyerStrategy(StrategyTemplate):
                 lambda x: x.replace(year=datetime.now().year, month=datetime.now().month, day=datetime.now().day)
             )
             
-            if (order.status == Status.ALLTRADED and 
-                order.offset == Offset.OPEN and
-                order.vt_symbol in self.option_count):
-                
-                if self.option_count[order.vt_symbol] < self.target_number - self.volume:
-                    self.write_log(f"订单全部成交，追加开仓: {order.vt_symbol}")
-                    self.open_order(order.price, self.add_volume, order.vt_symbol, 'buy', str(self.order_count))
-                    self.option_count[order.vt_symbol] += order.traded_volume
-
-                if self.option_count[order.vt_symbol] >= self.target_number - self.volume:
-                    self.option_count[order.vt_symbol] += order.traded_volume
-                    self.write_log(f'合约：{order.vt_symbol}持仓过多')
+            # 【注意！】请删除这里原本的 if (order.status == Status.ALLTRADED ...) 逻辑块
+            # 不要留旧代码在这里，否则会重复发单！
 
         except Exception:
             self.write_log(f"处理订单更新遇到错误 {traceback.format_exc()}")
+
+        # 3. 【核心修改】追单逻辑 + 去重 (只保留这一份)
+        # 条件：全部成交 + 开仓单 + 是本策略关注的品种
+        if (order.status == Status.ALLTRADED and 
+            order.offset == Offset.OPEN and 
+            order.vt_symbol in self.option_count):
+            
+            # 【去重检查】如果这笔单子ID已经在记录里，说明处理过了，直接退出
+            if order.ordersysid in self.processed_orders:
+                return
+
+            self.write_log(f"检测到新成交 (ID:{order.ordersysid})，执行追单判断...")
+
+            # 1. 标记为已处理 (加入列表，防止重启后重复处理)
+            self.processed_orders.append(order.ordersysid)
+            
+            # 2. 更新持仓计数
+            self.option_count[order.vt_symbol] += order.traded_volume
+            
+            # 3. 触发追单判断
+            current_count = self.option_count[order.vt_symbol]
+            target = self.target_number
+            
+            # 如果加上这笔后，还没买够 -> 追单
+            if current_count < target:
+                volume_needed = target - current_count
+                volume_to_order = min(self.add_volume, volume_needed)
+                
+                if volume_to_order > 0:
+                    self.write_log(f"持仓({current_count}) < 目标({target})，触发追加 {volume_to_order} 手...")
+                    self.open_order(
+                        order.price, 
+                        volume_to_order, 
+                        order.vt_symbol, 
+                        'buy', 
+                        f"Chase_{self.order_count}"
+                    )
+            else:
+                self.write_log(f'合约：{order.vt_symbol} 持仓已达标或过多 ({current_count})')
 
     def on_trade(self, trade: TradeData) -> None:
         self.write_log(f"成交信息更新 {self.generate_trade_info_string_from_trade_data(trade)}")

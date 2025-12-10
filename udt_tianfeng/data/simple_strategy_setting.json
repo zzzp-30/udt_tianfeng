@@ -1,5 +1,9 @@
 {
-
+    "macd": {
+        "class_name": "Macd",
+        "vt_symbols": [],
+        "setting": {}
+    },
     "CFFEX_Strategy": {
         "class_name": "BuyerStrategy",
         "vt_symbols": [],

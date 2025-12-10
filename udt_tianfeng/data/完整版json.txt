@@ -10,7 +10,7 @@
         "setting": {
             "target_exchanges": "CFFEX;CFFEX;CFFEX",
             "target_products": "IO;MO;HO",
-            "trade_list_source": "紫金",
+            "trade_list_source": "紫金",a
             "trade_list_path": "C:\\Users\\Administrator\\Desktop\\旧文件\\trade_list.xls",
             "volume": 1,
             "add_volume": 10
