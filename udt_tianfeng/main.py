@@ -220,6 +220,12 @@ import os
 import json
 import requests
 
+#专门用来以防文件损坏读取备份
+import json       # <--- 新增：用于解析 JSON 内容
+import shutil     # <--- 新增：用于复制文件
+from pathlib import Path  # <--- 新增：用于处理路径
+# ... (其他原有的 import 保持不变)
+
 import pandas as pd
 import akshare as ak
 from vnpy.trader.engine import EventEngine, MainEngine, OmsEngine
@@ -253,7 +259,7 @@ def map_accountid_to_name(account_id: str) -> str|None:
 
 # Chinese futures market trading period (day/night)
 DAY_START = time(8, 45)
-DAY_END = time(15, 0)
+DAY_END = time(17, 20)
 
 NIGHT_START = time(20, 45)
 NIGHT_END = time(2, 45)
@@ -528,6 +534,71 @@ def _read_excel_b2(path: str) -> float | None:
             return None
 
 
+def check_and_restore_setting():
+    """
+    启动前检查：如果发现配置文件的 setting 为空 {}，则从模板强制恢复。
+    """
+    try:
+        # 获取当前脚本所在目录 (即 udt_tianfeng/)
+        current_dir = Path(__file__).parent
+        
+        # 定义文件路径
+        setting_path = current_dir / "data" / "simple_strategy_setting.json"
+        template_path = current_dir / "data" / "setting.json.template"
+
+        # 1. 如果没有模板文件，报错提醒
+        if not template_path.exists():
+            print(f"⚠️ [警告] 未找到模板文件: {template_path}")
+            print("   请务必先复制一份正确的配置命名为 .template 后缀，否则无法自动恢复！")
+            return
+
+        # 2. 如果配置文件不存在，直接恢复
+        if not setting_path.exists():
+            print("⚠️ 配置文件丢失，正在从模板创建...")
+            shutil.copy(template_path, setting_path)
+            return
+
+        # 3. 读取当前配置文件内容进行检查
+        need_restore = False
+        try:
+            with open(setting_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # 【核心逻辑】检查关键策略的 setting 是否为空
+            # 这里检查您提到的 CFFEX, DCE, CZCE, SHFE 等策略
+            strategies_to_check = ["CFFEX_Strategy", "DCE_Strategy", "CZCE_Strategy", "SHFE_Strategy"]
+            
+            for name in strategies_to_check:
+                # 如果策略存在，但 setting 是空的 {}
+                if name in data and not data[name].get("setting"):
+                    print(f"🛑 检测到 [{name}] 的配置参数丢失 (为 {{}})，判定为异常！")
+                    need_restore = True
+                    break # 只要发现一个坏了，就直接全部恢复
+                
+                # 或者策略本身甚至都不在 json 里
+                if name not in data:
+                    print(f"🛑 检测到 [{name}] 丢失，判定为异常！")
+                    need_restore = True
+                    break
+
+        except json.JSONDecodeError:
+            print("🛑 配置文件格式损坏 (JSON解析失败)，判定为异常！")
+            need_restore = True
+        except Exception as e:
+            print(f"🛑 读取检查时发生错误: {e}，为了安全起见，将执行恢复。")
+            need_restore = True
+
+        # 4. 如果判定需要恢复，则执行覆盖
+        if need_restore:
+            print(f"♻️ 正在执行恢复操作...")
+            shutil.copy(template_path, setting_path)
+            print("✅ 配置文件已重置为模板状态。")
+        else:
+            print("✅ 配置文件检查正常 (参数未丢失)，继续运行。")
+
+    except Exception as e:
+        print(f"❌ 检查配置过程发生未知错误: {e}")
+        
 
 
 
@@ -688,4 +759,9 @@ def run_parent() -> None:
 
 
 if __name__ == "__main__":
+    
+    # 【新增】程序启动第一件事：检查配置是否坏了，坏了就修
+    check_and_restore_setting()
+    
     run_parent()
+    
