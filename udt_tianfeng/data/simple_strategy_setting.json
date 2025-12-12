@@ -7,49 +7,21 @@
     "CFFEX_Strategy": {
         "class_name": "BuyerStrategy",
         "vt_symbols": [],
-        "setting": {
-            "target_exchanges": "CFFEX;CFFEX;CFFEX",
-            "target_products": "IO;MO;HO",
-            "trade_list_source": "紫金",
-            "trade_list_path": "C:\\Users\\Administrator\\Desktop\\旧文件\\trade_list.xls",
-            "volume": 1,
-            "add_volume": 10
-        }
+        "setting": {}
     },
     "DCE_Strategy": {
         "class_name": "BuyerStrategy",
         "vt_symbols": [],
-        "setting": {
-            "target_exchanges": "DCE;DCE;DCE;DCE;DCE;DCE;DCE;DCE;DCE;DCE;DCE;DCE;DCE;DCE;DCE;DCE;DCE",
-            "target_products": "a_o; b_o; bz_o; cs_o; eb_o; eg_o; i_o; jd_o; l_o; lg_o; lh_o; m_o; p_o; pg_o; pp_o; v_o; y_o",
-            "trade_list_source": "紫金",
-            "trade_list_path": "C:\\Users\\Administrator\\Desktop\\旧文件\\trade_list.xls",
-            "volume": 1,
-            "add_volume": 10
-        }
+        "setting": {}
     },
     "CZCE_Strategy": {
         "class_name": "BuyerStrategy",
         "vt_symbols": [],
-        "setting": {
-            "target_exchanges": "CZCE;CZCE;CZCE;CZCE;CZCE;CZCE;CZCE;CZCE;CZCE;CZCE;CZCE;CZCE;CZCE;CZCE;CZCE;CZCE;CZCE;CZCE",
-            "target_products": "SR;CF;TA;MA;RM;ZC;OI;PK;PX;SH;PF;SA;UR;SM;SF;AP;CJ;FG",
-            "trade_list_source": "紫金",
-            "trade_list_path": "C:\\Users\\Administrator\\Desktop\\旧文件\\trade_list.xls",
-            "volume": 1,
-            "add_volume": 10
-        }
+        "setting": {}
     },
     "SHFE_Strategy": {
         "class_name": "BuyerStrategy",
         "vt_symbols": [],
-        "setting": {
-            "target_exchanges": "SHFE;SHFE;SHFE;SHFE;SHFE;SHFE;SHFE;SHFE;SHFE;SHFE;SHFE",
-            "target_products": "cu_o;au_o;al_o;zn_o;rb_o;ag_o;ru_o;pb_o;ni_o;sn_o;ao_o",
-            "trade_list_source": "紫金",
-            "trade_list_path": "C:\\Users\\Administrator\\Desktop\\旧文件\\trade_list.xls",
-            "volume": 1,
-            "add_volume": 10
-        }
+        "setting": {}
     }
 }

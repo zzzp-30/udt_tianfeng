@@ -536,68 +536,63 @@ def _read_excel_b2(path: str) -> float | None:
 
 def check_and_restore_setting():
     """
-    启动前检查：如果发现配置文件的 setting 为空 {}，则从模板强制恢复。
+    启动前检查：
+    1. 如果文件不存在 -> 恢复。
+    2. 如果文件存在，且包含 BuyerStrategy 策略，但其 setting 为空 {} -> 恢复（判定为被错误重置）。
+    3. 如果文件存在，但不包含 BuyerStrategy 策略 -> 不恢复（判定为用户自定义配置）。
     """
     try:
-        # 获取当前脚本所在目录 (即 udt_tianfeng/)
         current_dir = Path(__file__).parent
-        
-        # 定义文件路径
         setting_path = current_dir / "data" / "simple_strategy_setting.json"
         template_path = current_dir / "data" / "setting.json.template"
 
-        # 1. 如果没有模板文件，报错提醒
         if not template_path.exists():
-            print(f"⚠️ [警告] 未找到模板文件: {template_path}")
-            print("   请务必先复制一份正确的配置命名为 .template 后缀，否则无法自动恢复！")
             return
 
-        # 2. 如果配置文件不存在，直接恢复
         if not setting_path.exists():
             print("⚠️ 配置文件丢失，正在从模板创建...")
             shutil.copy(template_path, setting_path)
             return
 
-        # 3. 读取当前配置文件内容进行检查
         need_restore = False
         try:
             with open(setting_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            # 【核心逻辑】检查关键策略的 setting 是否为空
-            # 这里检查您提到的 CFFEX, DCE, CZCE, SHFE 等策略
+            # 检查列表
             strategies_to_check = ["CFFEX_Strategy", "DCE_Strategy", "CZCE_Strategy", "SHFE_Strategy"]
             
+            # 【核心修改】只检查“已存在”的策略是否坏了
             for name in strategies_to_check:
-                # 如果策略存在，但 setting 是空的 {}
-                if name in data and not data[name].get("setting"):
-                    print(f"🛑 检测到 [{name}] 的配置参数丢失 (为 {{}})，判定为异常！")
-                    need_restore = True
-                    break # 只要发现一个坏了，就直接全部恢复
-                
-                # 或者策略本身甚至都不在 json 里
-                if name not in data:
-                    print(f"🛑 检测到 [{name}] 丢失，判定为异常！")
-                    need_restore = True
-                    break
+                if name in data:
+                    # 如果策略在 json 里，但 setting 是空的 {} -> 判定为坏了，需要修
+                    if not data[name].get("setting"):
+                        print(f"🛑 检测到 [{name}] 存在但配置参数为空 {{}}，判定为异常被覆盖！")
+                        need_restore = True
+                        break
+                # 如果 name 不在 data 里 -> 说明用户本来就没配这个策略 -> 跳过，不报错
+            
+            # 额外检查：如果文件是空的或者没有任何策略 -> 可能是空文件 -> 恢复
+            if not data:
+                print("🛑 配置文件为空，判定为异常！")
+                need_restore = True
 
         except json.JSONDecodeError:
-            print("🛑 配置文件格式损坏 (JSON解析失败)，判定为异常！")
+            print("🛑 配置文件格式损坏，判定为异常！")
             need_restore = True
         except Exception as e:
-            print(f"🛑 读取检查时发生错误: {e}，为了安全起见，将执行恢复。")
+            print(f"🛑 读取检查错误: {e}，将执行恢复保底。")
             need_restore = True
 
-        # 4. 如果判定需要恢复，则执行覆盖
         if need_restore:
             print(f"♻️ 正在执行恢复操作...")
             shutil.copy(template_path, setting_path)
             print("✅ 配置文件已重置为模板状态。")
         else:
-            print("✅ 配置文件检查正常 (参数未丢失)，继续运行。")
+            print("✅ 配置文件检查正常 (未发现配置被清空)，继续运行。")
 
     except Exception as e:
-        print(f"❌ 检查配置过程发生未知错误: {e}")
+        print(f"❌ 检查配置过程发生错误: {e}")
         
 
 
@@ -669,14 +664,39 @@ def run_child() -> None:
     
     # 添加 App
     strategy_engine: StrategyEngine = main_engine.add_app(SimpleStrategyApp) # type: ignore
-    # 初始化 Engine
+# ...
+    # 初始化 Engine (加载配置，但不执行 on_init)
     strategy_engine.init_engine()
-    # 打印已加载的 strategy classes
     strategy_engine.write_log(f"已加载策略: {strategy_engine.get_all_strategy_class_names()}")
-    # 调用 StrategyTemplate#on_init (异步执行，但同步等待)
-    wait(strategy_engine.init_all_strategies().values())
+
+    # === 【核心修改】改为逐个顺序初始化 ===
+    main_engine.write_log(">>> 开始顺序初始化策略（避免数据源并发冲突）...")
+    
+    # 获取所有已加载的策略名称
+    # 注意：strategy_engine.strategies 是一个字典 {name: strategy_object}
+    all_strategy_names = list(strategy_engine.strategies.keys())
+    
+    for name in all_strategy_names:
+        main_engine.write_log(f"正在初始化: {name} ...")
+        
+        # 单独初始化一个策略
+        # init_strategy 会触发该策略的 on_init 函数
+        future = strategy_engine.init_strategy(name)
+        
+        # 等待该策略完全初始化结束 (wait 接收列表参数)
+        if future:
+            wait([future])
+            
+        main_engine.write_log(f"策略 {name} 初始化完成。休息 10 秒...")
+        # 强制休眠 10 秒，让 AkShare/交易所缓一口气，彻底避开冲突
+        sleep(10)
+        
+    main_engine.write_log(">>> 所有策略初始化完毕，准备启动交易。")
+    # ====================================
+
     # 调用 StrategyTemplate#on_start
     strategy_engine.start_all_strategies()
+    # ...
     
     last_tick_ts: float | None = None
     last_daily_date: str | None = None
