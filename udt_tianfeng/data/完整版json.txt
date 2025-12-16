@@ -4,6 +4,12 @@
         "vt_symbols": [],
         "setting": {}
     },
+    "combined":{
+        "class_name": "Combined",
+        "vt_symbols": [],
+        "setting": {
+        }
+    },
     "CFFEX_Strategy": {
         "class_name": "BuyerStrategy",
         "vt_symbols": [],

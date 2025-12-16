@@ -536,7 +536,11 @@ def _read_excel_b2(path: str) -> float | None:
 
 def check_and_restore_setting():
     """
-    启动前检查：如果发现配置文件的 setting 为空 {}，则从模板强制恢复。
+    启动前检查：
+    1. 如果配置文件不存在，完全从模板恢复。
+    2. 如果配置文件存在，但其中的某些 BuyerStrategy (如 CFFEX_Strategy) 配置为空 {}，
+       则仅从模板中复制该特定策略的 setting 内容，而不覆盖整个文件。
+    3. 如果配置文件中原本就没有某个策略（说明用户故意删除了），则不进行恢复。
     """
     try:
         # 获取当前脚本所在目录 (即 udt_tianfeng/)
@@ -546,55 +550,68 @@ def check_and_restore_setting():
         setting_path = current_dir / "data" / "simple_strategy_setting.json"
         template_path = current_dir / "data" / "setting.json.template"
 
-        # 1. 如果没有模板文件，报错提醒
+        # 1. 如果没有模板文件，报错提醒 (无法进行任何修复)
         if not template_path.exists():
             print(f"⚠️ [警告] 未找到模板文件: {template_path}")
-            print("   请务必先复制一份正确的配置命名为 .template 后缀，否则无法自动恢复！")
+            print("   请务必先复制一份正确的配置命名为 .template 后缀，否则无法自动修复！")
             return
 
-        # 2. 如果配置文件不存在，直接恢复
+        # 2. 如果配置文件完全不存在，直接从模板完整复制一份
         if not setting_path.exists():
-            print("⚠️ 配置文件丢失，正在从模板创建...")
+            print("⚠️ 配置文件丢失，正在从模板完整创建...")
             shutil.copy(template_path, setting_path)
             return
 
-        # 3. 读取当前配置文件内容进行检查
-        need_restore = False
+        # 3. 读取当前配置和模板配置
+        need_save = False
         try:
             with open(setting_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+                current_data = json.load(f)
             
-            # 【核心逻辑】检查关键策略的 setting 是否为空
-            # 这里检查您提到的 CFFEX, DCE, CZCE, SHFE 等策略
+            with open(template_path, 'r', encoding='utf-8') as f:
+                template_data = json.load(f)
+
+            # 需要检查的特定策略列表 (只检查这些交易所策略，不检查 Combined 或 Macd)
             strategies_to_check = ["CFFEX_Strategy", "DCE_Strategy", "CZCE_Strategy", "SHFE_Strategy"]
             
-            for name in strategies_to_check:
-                # 如果策略存在，但 setting 是空的 {}
-                if name in data and not data[name].get("setting"):
-                    print(f"🛑 检测到 [{name}] 的配置参数丢失 (为 {{}})，判定为异常！")
-                    need_restore = True
-                    break # 只要发现一个坏了，就直接全部恢复
+            for strategy_name in strategies_to_check:
+                # 规则 A：如果当前配置中根本没有这个策略（例如用户只跑 Combined），则跳过，不强行添加
+                if strategy_name not in current_data:
+                    continue
+
+                # 规则 B：如果策略存在，检查其 setting 是否为空 (None 或 {})
+                # 注意：这里假设正常情况下 setting 不应该为空
+                current_setting = current_data[strategy_name].get("setting")
                 
-                # 或者策略本身甚至都不在 json 里
-                if name not in data:
-                    print(f"🛑 检测到 [{name}] 丢失，判定为异常！")
-                    need_restore = True
-                    break
+                if not current_setting: # 如果是 {} 或 None
+                    print(f"🛑 检测到 [{strategy_name}] 存在但配置参数丢失 (为 {{}})，准备修复...")
+                    
+                    # 尝试从模板中获取对应的 setting
+                    if strategy_name in template_data and template_data[strategy_name].get("setting"):
+                        # 执行局部复制：只把模板里的 setting 塞给当前配置
+                        current_data[strategy_name]["setting"] = template_data[strategy_name]["setting"]
+                        need_save = True
+                        print(f"   ✅ 已从模板恢复 [{strategy_name}] 的配置参数。")
+                    else:
+                        print(f"   ⚠️ 模板文件中也没有 [{strategy_name}] 的有效配置，无法修复。")
 
         except json.JSONDecodeError:
-            print("🛑 配置文件格式损坏 (JSON解析失败)，判定为异常！")
-            need_restore = True
-        except Exception as e:
-            print(f"🛑 读取检查时发生错误: {e}，为了安全起见，将执行恢复。")
-            need_restore = True
-
-        # 4. 如果判定需要恢复，则执行覆盖
-        if need_restore:
-            print(f"♻️ 正在执行恢复操作...")
+            print("🛑 配置文件格式严重损坏 (JSON解析失败)，正在执行完整恢复...")
             shutil.copy(template_path, setting_path)
-            print("✅ 配置文件已重置为模板状态。")
+            return
+        except Exception as e:
+            print(f"🛑 读取检查时发生错误: {e}，跳过修复步骤。")
+            return
+
+        # 4. 如果有修改，将数据写回文件
+        if need_save:
+            print(f"💾 正在保存修复后的配置文件...")
+            with open(setting_path, 'w', encoding='utf-8') as f:
+                # ensure_ascii=False 保证中文字符（如'紫金'）正常显示，indent=4 保持格式美观
+                json.dump(current_data, f, ensure_ascii=False, indent=4)
+            print("✅ 配置文件修复完成。")
         else:
-            print("✅ 配置文件检查正常 (参数未丢失)，继续运行。")
+            print("✅ 配置文件检查正常 (无缺失参数或无需修复)。")
 
     except Exception as e:
         print(f"❌ 检查配置过程发生未知错误: {e}")
